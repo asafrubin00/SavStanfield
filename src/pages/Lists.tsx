@@ -1,0 +1,113 @@
+import { useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Cover, QuickRate } from '../components/ui';
+import { norm, useStore, type Index } from '../lib/store';
+import type { ListItem } from '../lib/types';
+import { now, uid } from '../lib/util';
+
+function itemView(ix: Index, it: ListItem) {
+  if (it.entity_type === 'release') { const r = ix.releases.get(it.entity_id!); return r && { to: `/release/${r.id}`, title: r.title, sub: `${r.artist_credit} · ${r.year ?? ''}`, img: r.artwork_url, round: false }; }
+  if (it.entity_type === 'artist') { const a = ix.artists.get(it.entity_id!); return a && { to: `/artist/${a.id}`, title: a.name, sub: 'Artist', img: a.image_url, round: true }; }
+  if (it.entity_type === 'track') { const t = ix.tracks.get(it.entity_id!); const r = t?.release_id ? ix.releases.get(t.release_id) : undefined; return t && { to: `/track/${t.id}`, title: t.title, sub: `${t.artist_credit ?? r?.artist_credit ?? ''}${r ? ` · ${r.title}` : ''}`, img: r?.artwork_url, round: false }; }
+  return { to: '', title: it.label ?? '', sub: 'Not in your library yet', img: null, round: false };
+}
+
+export function Lists() {
+  const { data, ix, upsert } = useStore();
+  const nav = useNavigate();
+  const [name, setName] = useState('');
+  const lists = [...data.lists].sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
+  return (
+    <div>
+      <div className="row" style={{ marginBottom: 20 }}><h1 className="h-page">Lists</h1></div>
+      <form className="row" style={{ marginBottom: 24 }} onSubmit={async (e) => { e.preventDefault(); if (!name.trim()) return; const id = uid(); await upsert('lists', [{ id, name: name.trim(), ranked: true, created_at: now(), updated_at: now() }]); nav(`/list/${id}`); }}>
+        <input className="input" style={{ width: 300 }} placeholder="New list name, e.g. Best of 2026" value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="btn primary" disabled={!name.trim()}>Create list</button>
+      </form>
+      {!lists.length ? <div className="empty">No lists yet. Make one above, or use “Add to list” on any artist, release or song.</div> : (
+        <div className="grid">{lists.map((l) => {
+          const items = [...(ix.itemsByList.get(l.id) ?? [])].sort((a, b) => a.position - b.position);
+          const imgs = items.map((i) => itemView(ix, i)?.img).filter(Boolean).slice(0, 4) as string[];
+          return (
+            <Link key={l.id} to={`/list/${l.id}`} className="tile" style={{ textDecoration: 'none' }}>
+              <div className="cover" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
+                {imgs.length === 4 ? imgs.map((s, i) => <img key={i} src={s} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />) : <Cover src={imgs[0]} title={l.name} />}
+              </div>
+              <div className="t">{l.name}</div><div className="s">{items.length} item{items.length === 1 ? '' : 's'}</div>
+            </Link>);
+        })}</div>
+      )}
+    </div>
+  );
+}
+
+export default function ListPage() {
+  const { id } = useParams();
+  const { data, ix, upsert, remove } = useStore();
+  const nav = useNavigate();
+  const l = ix.lists.get(id!);
+  const items = useMemo(() => [...(ix.itemsByList.get(id!) ?? [])].sort((a, b) => a.position - b.position), [ix, id]);
+  const [q, setQ] = useState('');
+  const [filter, setFilter] = useState('');
+  const results = useMemo(() => {
+    const n = norm(q); if (n.length < 2) return [];
+    return [
+      ...data.artists.filter((a) => norm(a.name).includes(n)).slice(0, 4).map((a) => ({ type: 'artist' as const, id: a.id, title: a.name, sub: 'Artist' })),
+      ...data.releases.filter((r) => norm(`${r.artist_credit} ${r.title}`).includes(n)).slice(0, 8).map((r) => ({ type: 'release' as const, id: r.id, title: r.title, sub: `${r.artist_credit} · ${r.year ?? ''}` })),
+      ...data.tracks.filter((t) => norm(t.title).includes(n)).slice(0, 4).map((t) => ({ type: 'track' as const, id: t.id, title: t.title, sub: `Song · ${t.artist_credit ?? ''}` })),
+    ];
+  }, [q, data]);
+  if (!l) return <div className="empty">List not found. <Link to="/lists">All lists</Link></div>;
+
+  const renumber = (arr: ListItem[]) => upsert('list_items', arr.map((it, i) => ({ ...it, position: i + 1 })));
+  const move = (i: number, d: number) => { const a = [...items]; const j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; void renumber(a); };
+  const touch = () => upsert('lists', [{ ...l, updated_at: now() }]);
+  const add = async (type: ListItem['entity_type'], eid: string | null, label?: string) => {
+    await upsert('list_items', [{ id: uid(), list_id: l.id, entity_type: type, entity_id: eid, label: label ?? null, position: (items.at(-1)?.position ?? 0) + 1 }]); void touch(); setQ('');
+  };
+  const fn = norm(filter);
+  const shownItems = items.filter((it) => !fn || norm(`${itemView(ix, it)?.title} ${itemView(ix, it)?.sub} ${it.note ?? ''}`).includes(fn));
+
+  return (
+    <div>
+      <input className="h-page" style={{ border: 0, background: 'transparent', width: '100%', padding: 0 }} value={l.name} aria-label="List name" onChange={(e) => upsert('lists', [{ ...l, name: e.target.value, updated_at: now() }])} />
+      <input className="input" style={{ width: '100%', marginTop: 10, background: 'transparent' }} placeholder="Add a description" value={l.description ?? ''} onChange={(e) => upsert('lists', [{ ...l, description: e.target.value }])} />
+      <div className="row" style={{ margin: '16px 0 22px' }}>
+        <label className="row"><input type="checkbox" checked={l.ranked} onChange={(e) => upsert('lists', [{ ...l, ranked: e.target.checked }])} /> Ranked</label>
+        <span className="muted">{items.length} items</span>
+        {items.length > 12 && <input className="input" placeholder="Filter this list" value={filter} onChange={(e) => setFilter(e.target.value)} />}
+        <span className="spacer" />
+        <button className="btn danger" onClick={async () => { if (confirm(`Delete the list “${l.name}”? Nothing in your library is deleted.`)) { await remove('list_items', items.map((i) => i.id)); await remove('lists', [l.id]); nav('/lists'); } }}>Delete list</button>
+      </div>
+      <div className="search" style={{ maxWidth: 560, marginBottom: 20 }}>
+        <input className="input" placeholder="Add from your library — search artists, releases, songs" value={q} onChange={(e) => setQ(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !results.length && q.trim()) void add('text', null, q.trim()); }} />
+        {q.trim().length >= 2 && <div className="dropdown">
+          {results.map((r) => <button key={r.type + r.id} className="dd-item btn ghost" style={{ width: '100%', justifyContent: 'flex-start', textAlign: 'left' }} onClick={() => add(r.type, r.id)}><span><strong>{r.title}</strong><div className="small muted">{r.sub}</div></span></button>)}
+          <button className="dd-item btn ghost" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={() => add('text', null, q.trim())}>Add “{q.trim()}” as a text item</button>
+        </div>}
+      </div>
+      {!items.length ? <div className="empty">This list is empty. Search above, or use “Add to list” on any page.</div> : (
+        <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{shownItems.map((it) => {
+          const i = items.indexOf(it); const v = itemView(ix, it);
+          return (
+            <li key={it.id} style={{ display: 'grid', gridTemplateColumns: `${l.ranked ? '44px ' : ''}56px 1fr auto`, gap: 14, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
+              {l.ranked && <span className="num" style={{ fontSize: 26, fontWeight: 800, fontVariationSettings: "'wdth' 70", textAlign: 'right', color: 'var(--muted)' }}>{i + 1}</span>}
+              <Cover src={v?.img} title={v?.title ?? '?'} size={56} round={v?.round} />
+              <div style={{ minWidth: 0 }}>
+                {v?.to ? <Link to={v.to} style={{ fontWeight: 700 }}>{v.title}</Link> : <strong>{v?.title ?? 'Removed from library'}</strong>}
+                <div className="small muted">{v?.sub}{it.entity_type === 'text' && <> · <Link to={`/find?q=${encodeURIComponent((it.label ?? '').replace(/\s*\(\d{4}\)$/, '').replace(' — ', ' '))}`}>find it</Link></>}</div>
+                <input className="input small" style={{ width: '100%', marginTop: 4, background: 'transparent', borderColor: 'transparent' }} placeholder="Add a note" defaultValue={it.note ?? ''}
+                  onBlur={(e) => e.target.value !== (it.note ?? '') && upsert('list_items', [{ ...it, note: e.target.value || null }])} />
+              </div>
+              <div className="row" style={{ flexWrap: 'nowrap', gap: 4 }}>
+                {it.entity_type !== 'text' && it.entity_id && <QuickRate type={it.entity_type} id={it.entity_id} />}
+                {l.ranked && <><button className="btn sm ghost" aria-label="Move up" disabled={i === 0 || !!fn} onClick={() => move(i, -1)}>Up</button><button className="btn sm ghost" aria-label="Move down" disabled={i === items.length - 1 || !!fn} onClick={() => move(i, 1)}>Down</button></>}
+                <button className="btn sm ghost" onClick={async () => { await remove('list_items', [it.id]); }}>Remove</button>
+              </div>
+            </li>);
+        })}</ol>
+      )}
+    </div>
+  );
+}
