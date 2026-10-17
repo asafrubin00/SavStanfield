@@ -13,6 +13,7 @@ import Home from './pages/Home';
 import Library from './pages/Library';
 import ListPage, { Lists } from './pages/Lists';
 import ReleasePage from './pages/ReleasePage';
+import Review, { needsReview } from './pages/Review';
 import Settings from './pages/Settings';
 import TrackPage from './pages/TrackPage';
 
@@ -96,6 +97,7 @@ function Shell() {
     });
   }, [ix, upsert]);
   const producers = useMemo(() => data.artists.filter((a) => a.is_producer).length, [data.artists]);
+  const toReview = useMemo(() => { const t = new Date().toISOString().slice(0, 10); return data.releases.filter((r) => needsReview(r, t)).length; }, [data.releases]);
   const nav: [string, string, number | null][] = [
     ['/', 'Home', null], ['/library', 'Library', data.releases.length], ['/artists', 'Artists', data.artists.length],
     ['/producers', 'Producers', producers], ['/lists', 'Lists', data.lists.length], ['/charts', 'Charts', null],
@@ -109,6 +111,7 @@ function Shell() {
           {nav.map(([to, label, n]) => <NavLink key={to} to={to} end={to === '/'}>{label}{n !== null && <span className="count">{n.toLocaleString()}</span>}</NavLink>)}
           <div className="nav-sep" />
           <NavLink to="/find">Find &amp; add music</NavLink>
+          <NavLink to="/review">Review matches{toReview > 0 && <span className="count">{toReview.toLocaleString()}</span>}</NavLink>
           <NavLink to="/settings">Import &amp; settings</NavLink>
         </nav>
         <div className="spacer" />
@@ -136,6 +139,7 @@ function Shell() {
               <Route path="/charts" element={<Charts />} />
               <Route path="/concerts" element={<Concerts />} />
               <Route path="/find" element={<Find />} />
+              <Route path="/review" element={<Review />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<div className="empty">That page doesn't exist. <Link to="/">Go home</Link></div>} />
             </Routes>

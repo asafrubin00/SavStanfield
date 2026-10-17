@@ -1,9 +1,9 @@
 import { useSyncExternalStore } from 'react';
-import { autoLinkArtist, autoLinkRelease } from './enrich';
+import { autoLinkArtist, autoLinkRelease, secondPassRelease } from './enrich';
 import type { Artist, Release } from './types';
 
 /** Background linking queue: works through artists/releases, pacing itself per API. */
-type Job = { kind: 'artist' | 'release'; id: string };
+type Job = { kind: 'artist' | 'release' | 'release2'; id: string };
 interface Deps {
   getArtist(id: string): Artist | undefined;
   getRelease(id: string): Release | undefined;
@@ -43,9 +43,11 @@ async function run() {
         const job = jobs.shift()!;
         queued.delete(`${job.kind}:${job.id}`);
         try {
-          if (job.kind === 'release') {
+          if (job.kind === 'release' || job.kind === 'release2') {
             const r = deps!.getRelease(job.id); if (!r) continue;
-            const res = await autoLinkRelease(r, deps!.releaseArtistName(r), { genius: true, wiki: false });
+            const res = job.kind === 'release'
+              ? await autoLinkRelease(r, deps!.releaseArtistName(r), { genius: true, wiki: false })
+              : await secondPassRelease(r, deps!.releaseArtistName(r));
             await deps!.saveRelease({ ...deps!.getRelease(job.id)!, ...res.patch });
             state.last = `${r.artist_credit ?? ''} – ${r.title}`;
             if (res.found.length) state.matched++;

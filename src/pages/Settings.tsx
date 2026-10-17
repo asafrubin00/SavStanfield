@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { mode, supabase } from '../lib/db';
 import { importWorkbook, type ImportResult } from '../lib/importSheet';
 import { linkQueue, useLinkQueue } from '../lib/queue';
@@ -61,6 +62,8 @@ export default function Settings() {
 
   const unlinkedReleases = data.releases.filter((r) => !r.ext.linked_at).map((r) => r.id);
   const unlinkedArtists = data.artists.filter((a) => !a.ext.linked_at).map((a) => a.id);
+  const today = new Date().toISOString().slice(0, 10);
+  const secondPass = data.releases.filter((r) => r.ext.linked_at && !r.ext.pass2_at && !r.artwork_url && !(r.date && r.date > today)).map((r) => r.id);
   const hours = (n: number) => { const h = (n * 3.2) / 3600; return h < 1 ? `${Math.ceil(h * 60)} min` : `${h.toFixed(1)} h`; };
 
   return (
@@ -83,6 +86,8 @@ export default function Settings() {
         <button className="btn primary" disabled={!unlinkedArtists.length} onClick={() => linkQueue.add('artist', unlinkedArtists)}>Link {unlinkedArtists.length.toLocaleString()} artists (~{hours(unlinkedArtists.length)})</button>
         <button className="btn primary" disabled={!unlinkedReleases.length} onClick={() => linkQueue.add('release', unlinkedReleases)}>Link {unlinkedReleases.length.toLocaleString()} releases (~{hours(unlinkedReleases.length)})</button>
       </div>
+      <p className="muted" style={{ marginBottom: 8 }}>Second pass: looser matching for releases still without a cover — Cover Art Archive, Deezer, a fuzzier MusicBrainz search and Genius album art. Whatever's left after that goes to <Link to="/review">Review matches</Link>.</p>
+      <button className="btn primary" disabled={!secondPass.length} onClick={() => linkQueue.add('release2', secondPass)}>Second pass on {secondPass.length.toLocaleString()} releases (~{Math.max(1, Math.ceil(secondPass.length * 2.7 / 60))} min)</button>
       {(q.pending > 0 || q.done > 0) && <div className="panel" style={{ marginTop: 12 }}>
         <div className="row"><strong className="num">{q.done.toLocaleString()} done, {q.pending.toLocaleString()} to go</strong><span className="muted small">{q.matched} matched · {q.errors} with errors</span><span className="spacer" />
           {q.paused ? <button className="btn sm" onClick={linkQueue.resume}>Resume</button> : <button className="btn sm" onClick={linkQueue.pause}>Pause</button>}

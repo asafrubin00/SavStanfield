@@ -20,7 +20,7 @@ export async function ext<T = unknown>(src: string, path: string, params: Record
 }
 
 // ——— Simple per-source pacing so we stay inside each API's rate limits ———
-const gaps: Record<string, number> = { itunes: 3100, mb: 1100, deezer: 120, genius: 250, wiki: 100, wikidata: 100, youtube: 200 };
+const gaps: Record<string, number> = { itunes: 3100, mb: 1100, deezer: 120, genius: 250, wiki: 100, wikidata: 100, youtube: 200, caa: 150 };
 const lastCall: Record<string, Promise<void>> = {};
 export function paced<T>(src: string, fn: () => Promise<T>): Promise<T> {
   const prev = lastCall[src] ?? Promise.resolve();
@@ -29,7 +29,7 @@ export function paced<T>(src: string, fn: () => Promise<T>): Promise<T> {
   return run;
 }
 /** Paced call with a couple of retries when a service says it's busy or rate-limited. */
-const call = async <T,>(src: string, path: string, params?: Record<string, string | number | undefined>): Promise<T> => {
+export const call = async <T,>(src: string, path: string, params?: Record<string, string | number | undefined>): Promise<T> => {
   for (let attempt = 0; ; attempt++) {
     try { return await paced(src, () => ext<T>(src, path, params)); }
     catch (e) {
@@ -52,6 +52,69 @@ export function titleScore(a: string, b: string) {
   return (hit / Math.max(xs.size, ys.length)) * 0.7;
 }
 export const artistMatch = (a: string, b: string) => { const x = norm(a), y = norm(b); return !!x && !!y && (x === y || x.includes(y) || y.includes(x)); };
+// ——— Fuzzy matching (second pass) ———
+/** Lower-case, no accents, no punctuation or spaces, no leading "the", no edition suffixes. */
+export const compact = (s: string) => norm(stripSuffix(s)).replace(/^the /, '').replace(/\s+/g, '');
+function dice(a: string, b: string) {
+  if (a === b) return 1;
+  if (a.length < 2 || b.length < 2) return 0;
+  const grams = new Map<string, number>();
+  for (let i = 0; i < a.length - 1; i++) { const g = a.slice(i, i + 2); grams.set(g, (grams.get(g) ?? 0) + 1); }
+  let hit = 0;
+  for (let i = 0; i < b.length - 1; i++) { const g = b.slice(i, i + 2); const n = grams.get(g) ?? 0; if (n) { hit++; grams.set(g, n - 1); } }
+  return (2 * hit) / (a.length + b.length - 2);
+}
+/** 0–1 similarity that shrugs off spacing, hyphens, punctuation, "The" and small typos. */
+export function fuzzy(a: string, b: string) {
+  const x = compact(a), y = compact(b);
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  const [s, l] = x.length < y.length ? [x, y] : [y, x];
+  if (l.includes(s) && s.length / l.length >= 0.6) return 0.9;
+  return dice(x, y);
+}
+/** Best similarity between a candidate artist and any artist in a credit like "A & B". */
+export function fuzzyArtist(credit: string, candidate: string) {
+  const parts = [credit, ...credit.split(/\s*(?:&|,|\bx\b|\bas\b|feat\.?)\s*/i)].map((p) => p.trim()).filter(Boolean);
+  const cands = [candidate, ...candidate.split(/\s*(?:&|,|\bx\b|feat\.?)\s*/i)].map((p) => p.trim()).filter(Boolean);
+  let best = 0;
+  for (const p of parts) for (const c of cands) best = Math.max(best, fuzzy(p, c));
+  return best;
+}
+/** Title variants: without (parentheticals), the part after a colon, and without "Artist's" / "Artist Presents" prefixes. */
+function titleVariants(t: string, artist: string) {
+  const out = new Set([t]);
+  const noParens = t.replace(/\s*[([][^)\]]*[)\]]/g, '').trim(); if (noParens) out.add(noParens);
+  for (const v of [...out]) { const i = v.lastIndexOf(':'); if (i > 0 && v.length - i > 4) out.add(v.slice(i + 1).trim()); }
+  for (const name of artist.split(/\s*(?:&|,)\s*/)) {
+    const re = new RegExp(`^${name.replace(/[.*+?^${}()|[\]\\$]/g, '\\$&')}(?:'s|’s)?\\s+(?:presents\\s+)?`, 'i');
+    for (const v of [...out]) { const s = v.replace(re, '').trim(); if (s && s !== v) out.add(s); }
+  }
+  return [...out];
+}
+/** Title similarity using the variants above on the candidate side, plain on ours (minus parentheticals). */
+export function fuzzyTitle(candidate: string, ours: string, candArtist: string) {
+  const mine = [ours, ours.replace(/\s*[([][^)\]]*[)\]]/g, '').trim()].filter(Boolean);
+  let best = 0;
+  for (const c of titleVariants(candidate, candArtist)) for (const m of mine) best = Math.max(best, fuzzy(c, m));
+  return best;
+}
+export const TITLE_OK = 0.85, ARTIST_OK = 0.7;
+/** Pick the best candidate that clears both thresholds. */
+export function bestMatch<T>(items: T[], title: string, artist: string, get: (t: T) => { title: string; artist: string }) {
+  let best: { item: T; score: number } | null = null;
+  for (const it of items) {
+    const g = get(it); const t = fuzzyTitle(g.title, title, g.artist);
+    // Compilations often list "Various Artists": accept only on an exact, reasonably long title.
+    const va = /^various( artists)?$/i.test(g.artist.trim()) && t === 1 && compact(title).length >= 8;
+    const a = va ? ARTIST_OK : fuzzyArtist(artist, g.artist);
+    if (t < TITLE_OK || a < ARTIST_OK) continue;
+    const score = t * 0.6 + a * 0.4;
+    if (!best || score > best.score) best = { item: it, score };
+  }
+  return best;
+}
+
 export const bigArt = (u?: string | null) => u?.replace(/\/\d+x\d+bb\./, '/1200x1200bb.');
 
 // ——— Apple (iTunes Search API: free, no key) ———
@@ -168,6 +231,30 @@ export async function deezerAlbum(title: string, artist: string) {
   const r = await call<{ data: { id: number; title: string; cover_xl: string; link: string; artist: { name: string } }[] }>('deezer', 'search/album', { q: `artist:"${artist}" album:"${stripSuffix(title)}"`, limit: 5 });
   return r.data?.find((a) => titleScore(a.title, title) >= 0.8 && artistMatch(a.artist.name, artist)) ?? null;
 }
+
+export interface DeezerAlbum { id: number; title: string; cover_xl: string; cover_medium: string; link: string; artist: { name: string }; record_type?: string }
+/** Plain (unquoted) Deezer album search — for fuzzy matching. */
+export async function deezerSearchAlbums(q: string, limit = 10): Promise<DeezerAlbum[]> {
+  const r = await call<{ data?: DeezerAlbum[] }>('deezer', 'search/album', { q: searchTerm(q), limit });
+  return r.data ?? [];
+}
+
+/** Loose MusicBrainz release-group search (no exact-phrase quoting). */
+export async function mbSearchGroupsLoose(title: string, artist: string): Promise<MBGroup[]> {
+  const words = (s: string) => searchTerm(s).replace(/[+\-!(){}[\]^"~*?:\\/]/g, ' ').trim();
+  const r = await call<{ 'release-groups': MBGroupRaw[] }>('mb', 'release-group', { query: `releasegroup:(${words(title)}) AND artist:(${words(artist)})`, limit: 10 });
+  return r['release-groups'].map(toGroup);
+}
+
+/** Front cover from the Cover Art Archive for a MusicBrainz release group, if one exists. */
+export async function caaCover(mbid: string): Promise<string | null> {
+  try {
+    const r = await call<{ images: { front: boolean; image: string; thumbnails: Record<string, string> }[] }>('caa', `release-group/${mbid}`);
+    const f = r.images.find((i) => i.front) ?? r.images[0];
+    return f ? (f.thumbnails['500'] ?? f.thumbnails.large ?? f.image).replace(/^http:/, 'https:') : null;
+  } catch { return null; }
+}
+export const caaThumb = (mbid: string) => `https://coverartarchive.org/release-group/${mbid}/front-250`;
 
 // ——— Genius (free token) ———
 export interface GeniusHit { id: number; title: string; full_title: string; url: string; artist: string; artistId: number; artistUrl: string; image?: string; artistImage?: string }

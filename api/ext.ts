@@ -14,7 +14,7 @@ const SOURCES: Record<string, (path: string, qs: URLSearchParams, env: Env) => {
     return { url: `https://itunes.apple.com/${p}?${qs}` };
   },
   mb: (p, qs) => { qs.set('fmt', 'json'); return { url: `https://musicbrainz.org/ws/2/${p}?${qs}`, headers: { 'User-Agent': UA } }; },
-  deezer: (p, qs) => ({ url: `https://api.deezer.com/${p}?${qs}` }),
+  deezer: (p, qs) => ({ url: `https://api.deezer.com/${p}?${qs}`, headers: { 'User-Agent': UA } }),
   genius: (p, qs, env) => env.GENIUS_TOKEN
     ? { url: `https://api.genius.com/${p}?${qs}`, headers: { Authorization: `Bearer ${env.GENIUS_TOKEN}` } }
     : 'Genius token not set (GENIUS_TOKEN)',
@@ -25,6 +25,7 @@ const SOURCES: Record<string, (path: string, qs: URLSearchParams, env: Env) => {
   },
   wiki: (p, qs) => ({ url: `https://en.wikipedia.org/${p}?${qs}`, headers: { 'User-Agent': UA } }),
   wikidata: (p, qs) => ({ url: `https://www.wikidata.org/${p}?${qs}`, headers: { 'User-Agent': UA } }),
+  caa: (p) => ({ url: `https://coverartarchive.org/${p}`, headers: { 'User-Agent': UA } }),
 };
 
 const verified = new Map<string, number>();
