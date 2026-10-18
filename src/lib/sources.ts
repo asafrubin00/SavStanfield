@@ -20,7 +20,7 @@ export async function ext<T = unknown>(src: string, path: string, params: Record
 }
 
 // ——— Simple per-source pacing so we stay inside each API's rate limits ———
-const gaps: Record<string, number> = { itunes: 3100, mb: 1100, deezer: 120, genius: 250, wiki: 100, wikidata: 100, youtube: 200, caa: 150 };
+const gaps: Record<string, number> = { itunes: 3100, mb: 1100, deezer: 120, genius: 250, wiki: 100, wikidata: 100, youtube: 200, caa: 150, soundcloud: 400, scoembed: 200 };
 const lastCall: Record<string, Promise<void>> = {};
 export function paced<T>(src: string, fn: () => Promise<T>): Promise<T> {
   const prev = lastCall[src] ?? Promise.resolve();
@@ -255,6 +255,60 @@ export async function caaCover(mbid: string): Promise<string | null> {
   } catch { return null; }
 }
 export const caaThumb = (mbid: string) => `https://coverartarchive.org/release-group/${mbid}/front-250`;
+
+// ——— Labels ———
+/** "℗ 2016 Def Jam Recordings, a division of UMG Recordings, Inc." → ["Def Jam Recordings"] */
+export function labelsFromCopyright(c?: string | null): string[] {
+  if (!c) return [];
+  let s = c.replace(/^[\s℗©(Pp)]+/u, '').replace(/^\(?[pc]\)?\s*/i, '').replace(/^\d{4}(\s*[-–]\s*\d{4})?\s*/, '');
+  s = s.split(/,\s*(a division|a unit|an? \w+ company|under exclusive|distributed|marketed|inc\b|llc\b)/i)[0];
+  s = s.split(/\s+(under exclusive|exclusively licensed|distributed by|marketed by|in association with)\b/i)[0];
+  return splitLabels(s);
+}
+export const splitLabels = (s: string) => s.split(/\s*\/\s*|\s*;\s*|\s+x\s+/i).map((x) => x.replace(/,?\s+(inc|llc|ltd|limited|corp|corporation)\.?$/i, '').replace(/[.,]+$/, '').trim()).filter((x) => x.length > 1 && !/^(\[?no label\]?|not on label|self[- ]released|independent)$/i.test(x));
+
+export async function deezerAlbumLabel(id: number): Promise<string[]> {
+  const r = await call<{ label?: string; error?: unknown }>('deezer', `album/${id}`);
+  return r.label ? splitLabels(r.label) : [];
+}
+export async function appleAlbumLabel(id: number): Promise<string[]> {
+  const r = await call<{ results: { copyright?: string }[] }>('itunes', 'lookup', { id, entity: 'album' });
+  return labelsFromCopyright(r.results[0]?.copyright);
+}
+export async function mbGroupLabels(mbid: string): Promise<string[]> {
+  const r = await call<{ releases: { status?: string; date?: string; country?: string; 'label-info'?: { label?: { name: string } }[] }[] }>('mb', 'release', { 'release-group': mbid, inc: 'labels', limit: 25 });
+  // The original release: earliest dated official one with a label, US first on ties
+  const withLabel = r.releases.filter((x) => x['label-info']?.some((li) => li.label?.name && !/no label/i.test(li.label.name)));
+  const rank = (x: typeof withLabel[0]) => `${x.status === 'Official' ? 0 : 1}${x.date || '9999'}${x.country === 'US' ? 0 : x.country === 'XW' ? 1 : 2}`;
+  const rel = withLabel.sort((a, b) => rank(a).localeCompare(rank(b)))[0];
+  return [...new Set((rel?.['label-info'] ?? []).map((li) => li.label?.name ?? '').flatMap(splitLabels))];
+}
+
+// ——— SoundCloud ———
+/** Embed + artwork for a pasted SoundCloud URL (no key needed). */
+export async function soundcloudOembed(url: string): Promise<{ title: string; author: string; thumb?: string; html: string } | null> {
+  try {
+    const r = await ext<{ title: string; author_name: string; thumbnail_url?: string; html: string }>('scoembed', '', { url });
+    return { title: r.title, author: r.author_name, thumb: r.thumbnail_url?.replace(/-(large|t300x300|t500x500)\./, '-t500x500.'), html: r.html };
+  } catch { return null; }
+}
+export const isSoundcloud = (u?: string | null) => !!u && /^https?:\/\/(www\.|m\.|on\.)?soundcloud\.com\//i.test(u);
+export function soundcloudEmbed(url?: string | null) {
+  return isSoundcloud(url) ? `https://w.soundcloud.com/player/?url=${encodeURIComponent(url!)}&color=%232a3fd1&visual=true&show_comments=false` : null;
+}
+export interface SCItem { id: number; kind: 'playlist' | 'track'; title: string; artist: string; url: string; artwork?: string; year?: string; tracks?: number }
+interface SCRaw { id: number; title: string; permalink_url: string; artwork_url?: string | null; user?: { username: string; avatar_url?: string }; created_at?: string; release_year?: number; track_count?: number; playlist_type?: string }
+const scArt = (u?: string | null) => u ? u.replace(/-(large|t300x300)\./, '-t500x500.') : undefined;
+/** Search SoundCloud albums/playlists (and tracks for singles). Needs SoundCloud app keys on the server. */
+export async function soundcloudSearch(q: string, kinds: ('playlist' | 'track')[] = ['playlist', 'track']): Promise<SCItem[]> {
+  const out: SCItem[] = [];
+  for (const kind of kinds) {
+    const r = await call<SCRaw[] | { collection: SCRaw[] }>('soundcloud', kind === 'playlist' ? 'playlists' : 'tracks', { q: searchTerm(q), limit: 10, linked_partitioning: 'true', access: 'playable' });
+    const list = Array.isArray(r) ? r : r.collection ?? [];
+    out.push(...list.map((x) => ({ id: x.id, kind, title: x.title, artist: x.user?.username ?? '', url: x.permalink_url, artwork: scArt(x.artwork_url ?? x.user?.avatar_url), year: x.release_year ? String(x.release_year) : x.created_at?.slice(0, 4), tracks: x.track_count })));
+  }
+  return out;
+}
 
 // ——— Genius (free token) ———
 export interface GeniusHit { id: number; title: string; full_title: string; url: string; artist: string; artistId: number; artistUrl: string; image?: string; artistImage?: string }

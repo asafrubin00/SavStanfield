@@ -4,7 +4,8 @@ import { AddToList, AnnotationPanel, Cover, fmtDate, LinkBar, LinksEditor, Modal
 import { autoLinkArtist } from '../lib/enrich';
 import { parseArtistCredit } from '../lib/importSheet';
 import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists, type AppleAlbum, type MBGroup } from '../lib/sources';
-import { norm, useStore } from '../lib/store';
+import { artistLabels, norm, useStore } from '../lib/store';
+import { SortSelect, usePref } from '../components/controls';
 import { RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
 import { linkQueue } from '../lib/queue';
@@ -21,6 +22,9 @@ export default function ArtistPage() {
   const [disco, setDisco] = useState(false);
   const [merging, setMerging] = useState(false);
   const [bioOpen, setBioOpen] = useState(false);
+  const [discSort, setDiscSort] = usePref('artist.discSort', 'newest');
+  const [grouped, setGrouped] = usePref('artist.grouped', true);
+  const [showCounts, setShowCounts] = usePref('artists.showCounts', false);
 
   const credits = useMemo(() => ix.creditsByArtist.get(id!) ?? [], [ix, id]);
   const { discog, produced, appearances } = useMemo(() => {
@@ -41,9 +45,18 @@ export default function ArtistPage() {
   }, [credits, ix]);
 
   if (!a) return <div className="empty">This artist isn't in your library. <Link to="/artists">All artists</Link></div>;
+  const day = (r: Release) => r.date ?? `${r.year ?? 0}`;
+  const rt = (r: Release) => ix.ann.get(`release:${r.id}`)?.rating ?? 0;
+  const sorter: Record<string, (x: Release, y: Release) => number> = {
+    newest: (x, y) => day(y).localeCompare(day(x)), oldest: (x, y) => day(x).localeCompare(day(y)),
+    rating: (x, y) => rt(y) - rt(x) || day(y).localeCompare(day(x)), title: (x, y) => x.title.localeCompare(y.title),
+  };
+  const sorted = [...discog].sort(sorter[discSort] ?? sorter.newest);
   const byType = new Map<string, Release[]>();
-  for (const r of discog) (byType.get(r.type) ?? byType.set(r.type, []).get(r.type)!).push(r);
-  const typeOrder = [...RELEASE_TYPES, ...[...byType.keys()].filter((t) => !RELEASE_TYPES.includes(t))].filter((t) => byType.has(t));
+  if (grouped) for (const r of sorted) (byType.get(r.type) ?? byType.set(r.type, []).get(r.type)!).push(r);
+  else if (sorted.length) byType.set('All releases', sorted);
+  const labelsHere = artistLabels(ix, a.id);
+  const typeOrder = grouped ? [...RELEASE_TYPES, ...[...byType.keys()].filter((t) => !RELEASE_TYPES.includes(t))].filter((t) => byType.has(t)) : [...byType.keys()];
   const rated = discog.map((r) => ix.ann.get(`release:${r.id}`)?.rating).filter(Boolean) as number[];
   const avg = rated.length ? rated.reduce((s, x) => s + x, 0) / rated.length : null;
   const concerts = data.concerts.filter((c) => c.artist_id === a.id);
@@ -67,11 +80,15 @@ export default function ArtistPage() {
           <div className="muted" style={{ marginBottom: 8 }}>{a.is_producer ? 'Artist and producer' : 'Artist'}{a.aliases.length ? ` · also ${a.aliases.join(', ')}` : ''}</div>
           <h1 className="hero-name">{a.name}</h1>
           <div className="hero-meta">
-            <span>{discog.length} release{discog.length === 1 ? '' : 's'}</span>
-            {produced.length > 0 && <span>{produced.length} produced</span>}
+            {showCounts && <span>{discog.length} release{discog.length === 1 ? '' : 's'}</span>}
+            {showCounts && produced.length > 0 && <span>{produced.length} produced</span>}
+            {ix.lastByArtist.get(a.id) && <span>Latest release {fmtDate(ix.lastByArtist.get(a.id))}</span>}
             {avg !== null && <span className="num">Your average {avg.toFixed(1)} ★ across {rated.length}</span>}
             <QuickRate type="artist" id={a.id} />
           </div>
+          {labelsHere.length > 0 && <div className="row" style={{ marginTop: 12, gap: 6 }}>
+            {labelsHere.slice(0, 8).map(({ label, manual, n }) => <Link key={label.id} className="chip" to={`/label/${label.id}`} title={manual ? 'Set by you' : `${n} release${n === 1 ? '' : 's'}`}>{label.name}</Link>)}
+          </div>}
         </div>
       </div>
       <div style={{ margin: '22px 0' }}><LinkBar links={a.links} kind="artist" name={a.name} onEdit={() => setEditLinks(true)} /></div>
@@ -88,10 +105,15 @@ export default function ArtistPage() {
       <div className="two" style={{ marginTop: 28 }}>
         <div>
           {a.bio && <p style={{ maxWidth: '68ch', marginTop: 0 }}>{bioOpen || a.bio.length < 420 ? a.bio : `${a.bio.slice(0, 420)}… `}{a.bio.length >= 420 && <button className="btn sm ghost" onClick={() => setBioOpen(!bioOpen)}>{bioOpen ? 'Less' : 'More'}</button>}</p>}
+          {discog.length > 0 && <div className="row" style={{ marginTop: 8 }}>
+            <SortSelect value={discSort} onChange={setDiscSort} options={[['newest', 'Newest first'], ['oldest', 'Oldest first'], ['rating', 'Your rating'], ['title', 'Title A–Z']]} />
+            <label className="row"><input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} /> Group by type</label>
+            <label className="row"><input type="checkbox" checked={showCounts} onChange={(e) => setShowCounts(e.target.checked)} /> Show counts</label>
+          </div>}
           {!discog.length && <div className="empty">No releases yet. <br /><button className="btn" onClick={() => setDisco(true)}>Import discography</button></div>}
           {typeOrder.map((t) => (
             <section key={t}>
-              <h2 className="h-sec">{t === 'Album' ? 'Albums' : t === 'Mixtape' ? 'Mixtapes' : t === 'EP' ? 'EPs' : t === 'Single' ? 'Singles' : t} <span className="muted">{byType.get(t)!.length}</span></h2>
+              <h2 className="h-sec">{t === 'Album' ? 'Albums' : t === 'Mixtape' ? 'Mixtapes' : t === 'EP' ? 'EPs' : t === 'Single' ? 'Singles' : t} {showCounts && <span className="muted">{byType.get(t)!.length}</span>}</h2>
               <div className="grid tight">{byType.get(t)!.map((r) => <ReleaseTile key={r.id} r={r} showArtist={r.artist_credit !== a.name} />)}</div>
             </section>
           ))}
@@ -129,18 +151,23 @@ export default function ArtistPage() {
 }
 
 export function ArtistForm({ artist, onClose }: { artist?: Artist; onClose: () => void }) {
-  const { upsert } = useStore();
+  const { upsert, ix, setArtistLabels } = useStore();
   const nav = useNavigate();
+  const manualLabels = artist ? (ix.artistLabelsByArtist.get(artist.id) ?? []).map((x) => ix.labels.get(x.label_id)?.name).filter(Boolean).join(', ') : '';
+  const [labels, setLabels] = useState(manualLabels);
   const [f, setF] = useState({ name: artist?.name ?? '', aliases: artist?.aliases.join(', ') ?? '', image_url: artist?.image_url ?? '', bio: artist?.bio ?? '', is_producer: artist?.is_producer ?? false });
   return (
     <Modal title={artist ? 'Edit artist' : 'Add an artist'} onClose={onClose}>
       <form className="form-grid" onSubmit={async (e) => {
         e.preventDefault(); if (!f.name.trim()) return;
         const a: Artist = { ...(artist ?? { id: uid(), links: {}, ext: {}, created_at: now() }), name: f.name.trim(), aliases: f.aliases.split(',').map((s) => s.trim()).filter(Boolean), image_url: f.image_url || null, bio: f.bio || null, is_producer: f.is_producer, updated_at: now() } as Artist;
-        await upsert('artists', [a]); onClose(); if (!artist) nav(`/artist/${a.id}`);
+        await upsert('artists', [a]);
+        if (labels !== manualLabels) await setArtistLabels(a.id, labels.split(','));
+        onClose(); if (!artist) nav(`/artist/${a.id}`);
       }}>
         <label className="full"><span className="label">Name</span><input className="input" style={{ width: '100%' }} required autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
         <label className="full"><span className="label">Other names, comma-separated (helps matching)</span><input className="input" style={{ width: '100%' }} value={f.aliases} onChange={(e) => setF({ ...f, aliases: e.target.value })} /></label>
+        <label className="full"><span className="label">Labels they're signed to, comma-separated (labels from their releases show up automatically)</span><input className="input" style={{ width: '100%' }} value={labels} onChange={(e) => setLabels(e.target.value)} /></label>
         <label className="full"><span className="label">Photo URL</span><input className="input" style={{ width: '100%' }} value={f.image_url} onChange={(e) => setF({ ...f, image_url: e.target.value })} /></label>
         <label className="full"><span className="label">Bio</span><textarea className="textarea" value={f.bio} onChange={(e) => setF({ ...f, bio: e.target.value })} /></label>
         <label className="row full"><input type="checkbox" checked={f.is_producer} onChange={(e) => setF({ ...f, is_producer: e.target.checked })} /> Show under producers</label>

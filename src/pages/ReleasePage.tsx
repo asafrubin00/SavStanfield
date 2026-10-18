@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, fmtMs, LinkBar, LinksEditor, Modal, QuickRate } from '../components/ui';
-import { autoLinkRelease } from '../lib/enrich';
+import { autoLinkRelease, findReleaseLabels } from '../lib/enrich';
 import { parseArtistCredit } from '../lib/importSheet';
 import { fantanoSearch, mergeLinks } from '../lib/links';
 import {
   appleAlbumTracks, appleEmbed, appleFindAlbum, appleSearchAlbums, artistMatch, geniusSearch, geniusSong, mbLinks, mbSearchGroups,
-  titleScore, wikiSearch, wikidataToWikipedia, youtubeEmbed, youtubeSearch, type AppleAlbum, type GeniusHit, type MBGroup,
+  soundcloudEmbed, soundcloudOembed, titleScore, wikiSearch, wikidataToWikipedia, youtubeEmbed, youtubeSearch, type AppleAlbum, type GeniusHit, type MBGroup,
 } from '../lib/sources';
-import { norm, releaseArtists, trackArtists, useStore } from '../lib/store';
+import { norm, releaseArtists, releaseLabels, trackArtists, useStore } from '../lib/store';
 import { RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
 
@@ -22,7 +22,7 @@ export default function ReleasePage() {
   const [editing, setEditing] = useState(false);
   const [matching, setMatching] = useState(false);
   const [busy, setBusy] = useState('');
-  const [embed, setEmbed] = useState<'apple' | 'youtube' | null>(null);
+  const [embed, setEmbed] = useState<'apple' | 'youtube' | 'soundcloud' | null>(null);
   const [yt, setYt] = useState<Awaited<ReturnType<typeof youtubeSearch>> | null>(null);
 
   const tracks = useMemo(() => [...(ix.tracksByRelease.get(id!) ?? [])].sort((a, b) => (a.disc ?? 1) - (b.disc ?? 1) || (a.number ?? 0) - (b.number ?? 0)), [ix, id]);
@@ -101,7 +101,24 @@ export default function ReleasePage() {
     } catch (e) { say((e as Error).message); } finally { setBusy(''); }
   }
 
-  const ae = appleEmbed(r.links.apple); const ye = youtubeEmbed(r.links.youtube);
+  const ae = appleEmbed(r.links.apple); const ye = youtubeEmbed(r.links.youtube); const se = soundcloudEmbed(r.links.soundcloud);
+  const relLabels = releaseLabels(ix, r.id);
+  /** Saving links: a new SoundCloud link also brings its cover if the release has none. */
+  async function saveLinks(links: Release['links']) {
+    let artwork_url = r!.artwork_url;
+    if (!artwork_url && links.soundcloud && links.soundcloud !== r!.links.soundcloud) {
+      const o = await soundcloudOembed(links.soundcloud); if (o?.thumb) { artwork_url = o.thumb; say('Cover taken from SoundCloud'); }
+    }
+    await save({ links, artwork_url });
+  }
+  async function findLabels() {
+    setBusy('Looking up labels…');
+    try {
+      const res = await findReleaseLabels(r!);
+      if (res.names.length) { await st.setReleaseLabels(r!.id, [...relLabels.map((l) => l.name), ...res.names]); say(`Labels from ${res.source}: ${res.names.join(', ')}`); }
+      else say('No label found — add it with Edit');
+    } catch (e) { say((e as Error).message); } finally { setBusy(''); }
+  }
 
   return (
     <div>
@@ -112,7 +129,7 @@ export default function ReleasePage() {
           <h1 className="hero-title">{r.title}</h1>
           <div style={{ fontSize: 22, fontWeight: 600, marginTop: 10, fontVariationSettings: "'wdth' 85" }}><Credits release={r} /></div>
           <div className="hero-meta">
-            <span className="num">{r.date ? fmtDate(r.date) : r.year}</span>{r.label && <span>{r.label}</span>}
+            <span className="num">{r.date ? fmtDate(r.date) : r.year}</span>{relLabels.map((l) => <Link key={l.id} to={`/label/${l.id}`}>{l.name}</Link>)}
             {tracks.length > 0 && <span>{tracks.length} tracks</span>}
             <QuickRate type="release" id={r.id} />
           </div>
@@ -127,6 +144,7 @@ export default function ReleasePage() {
         <button className="btn" disabled={!!busy} onClick={() => setMatching(true)}>Match by hand</button>
         <button className="btn" disabled={!!busy} onClick={fetchTracks}>{tracks.length ? 'Update tracklist' : 'Get tracklist'}</button>
         <button className="btn" disabled={!!busy || !tracks.length} onClick={fetchProducers} title="Looks up each song on Genius">Get producer credits</button>
+        {!relLabels.length && <button className="btn" disabled={!!busy || !(r.ext.deezer_id || r.ext.mbid || r.ext.apple_id)} onClick={findLabels} title="From Deezer, MusicBrainz or Apple Music">Find labels</button>}
         <AddToList type="release" id={r.id} />
         <button className="btn" onClick={() => setEditing(true)}>Edit</button>
         {busy && <span className="small muted">{busy}</span>}
@@ -137,9 +155,11 @@ export default function ReleasePage() {
           <div className="row" style={{ marginBottom: 10 }}>
             {ae && <button className={`chip${embed === 'apple' ? ' on' : ''}`} onClick={() => setEmbed(embed === 'apple' ? null : 'apple')}>Play on Apple Music</button>}
             {ye && <button className={`chip${embed === 'youtube' ? ' on' : ''}`} onClick={() => setEmbed(embed === 'youtube' ? null : 'youtube')}>Play on YouTube</button>}
+            {se && <button className={`chip${embed === 'soundcloud' ? ' on' : ''}`} onClick={() => setEmbed(embed === 'soundcloud' ? null : 'soundcloud')}>Play on SoundCloud</button>}
             {!ye && <button className="chip" disabled={!!busy} onClick={findYoutube}>Find on YouTube</button>}
           </div>
           {embed === 'apple' && ae && <iframe className="embed" title="Apple Music player" src={ae} height={450} allow="autoplay *; encrypted-media *; clipboard-write" sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-top-navigation-by-user-activation" />}
+          {embed === 'soundcloud' && se && <iframe className="embed" title="SoundCloud player" src={se} height={400} allow="autoplay" />}
           {embed === 'youtube' && ye && <iframe className="embed" title="YouTube player" src={ye} style={{ aspectRatio: '16/9' }} allow="encrypted-media; picture-in-picture" allowFullScreen />}
           {yt && <div className="panel" style={{ marginBottom: 16 }}>
             <div className="row" style={{ marginBottom: 8 }}><strong>Pick the right YouTube upload</strong><span className="spacer" /><button className="btn sm ghost" onClick={() => setYt(null)}>Close</button></div>
@@ -191,7 +211,7 @@ export default function ReleasePage() {
         </div>
       </div>
 
-      {editLinks && <LinksEditor links={r.links} onClose={() => setEditLinks(false)} onSave={(links) => save({ links })} />}
+      {editLinks && <LinksEditor links={r.links} onClose={() => setEditLinks(false)} onSave={(links) => void saveLinks(links)} />}
       {editing && <ReleaseForm release={r} onClose={() => setEditing(false)} />}
       {matching && <MatchWizard release={r} artistName={artistName} onClose={() => setMatching(false)} />}
     </div>
@@ -230,6 +250,8 @@ export function ReleaseForm({ release, onClose, defaults }: { release?: Release;
   const init = release ?? { title: '', type: 'Album', artist_credit: '', date: '', year: null, label: '', artwork_url: '', ...defaults };
   const [f, setF] = useState({ title: init.title, type: init.type, artist_credit: init.artist_credit ?? '', date: init.date ?? '', year: init.year ? String(init.year) : '', label: init.label ?? '', artwork_url: init.artwork_url ?? '' });
   const execs = release ? releaseArtists(st.ix, release.id, 'exec_producer').map((a) => a.name).join(', ') : '';
+  const curLabels = release ? releaseLabels(st.ix, release.id).map((l) => l.name).join(', ') : '';
+  const [labels, setLabels] = useState(curLabels);
   const [prod, setProd] = useState(execs);
   const up = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   async function submit() {
@@ -244,6 +266,7 @@ export function ReleaseForm({ release, onClose, defaults }: { release?: Release;
       const { names, group } = parseArtistCredit(r.artist_credit!, /collab/i.test(r.type));
       [...(group ? [group] : []), ...names].forEach((n, i) => st.creditArtist(st.ensureArtist(n).artist.id, { release_id: r.id }, 'primary', i));
     }
+    if (labels !== curLabels) await st.setReleaseLabels(r.id, labels.split(','));
     if (prod !== execs) {
       await st.remove('credits', (st.ix.creditsByRelease.get(r.id) ?? []).filter((c) => c.role === 'exec_producer').map((c) => c.id));
       prod.split(',').map((s) => s.trim()).filter(Boolean).forEach((n, i) => st.creditArtist(st.ensureArtist(n, { is_producer: true }).artist.id, { release_id: r.id }, 'exec_producer', i));
@@ -259,7 +282,7 @@ export function ReleaseForm({ release, onClose, defaults }: { release?: Release;
         <label><span className="label">Type</span><select className="select" style={{ width: '100%' }} value={f.type} onChange={up('type')}>{[...new Set([...RELEASE_TYPES, f.type])].map((t) => <option key={t}>{t}</option>)}</select></label>
         <label><span className="label">Release date</span><input className="input" style={{ width: '100%' }} type="date" value={f.date} onChange={up('date')} /></label>
         <label><span className="label">Year (if no exact date)</span><input className="input num" style={{ width: '100%' }} inputMode="numeric" value={f.year} onChange={up('year')} /></label>
-        <label><span className="label">Label</span><input className="input" style={{ width: '100%' }} value={f.label} onChange={up('label')} /></label>
+        <label><span className="label">Labels, comma-separated</span><input className="input" style={{ width: '100%' }} value={labels} onChange={(e) => setLabels(e.target.value)} /></label>
         <label className="full"><span className="label">Executive producer(s), comma-separated</span><input className="input" style={{ width: '100%' }} value={prod} onChange={(e) => setProd(e.target.value)} /></label>
         <label className="full"><span className="label">Artwork URL</span><input className="input" style={{ width: '100%' }} value={f.artwork_url} onChange={up('artwork_url')} placeholder="https://…" /></label>
         <div className="full row"><span className="spacer" /><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn primary">{release ? 'Save changes' : 'Add release'}</button></div>

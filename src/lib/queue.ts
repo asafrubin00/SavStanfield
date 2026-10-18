@@ -1,15 +1,17 @@
 import { useSyncExternalStore } from 'react';
-import { autoLinkArtist, autoLinkRelease, secondPassRelease } from './enrich';
+import { autoLinkArtist, autoLinkRelease, findReleaseLabels, secondPassRelease, soundcloudPassRelease } from './enrich';
+import { now } from './util';
 import type { Artist, Release } from './types';
 
 /** Background linking queue: works through artists/releases, pacing itself per API. */
-type Job = { kind: 'artist' | 'release' | 'release2'; id: string };
+type Job = { kind: 'artist' | 'release' | 'release2' | 'release3' | 'labels'; id: string };
 interface Deps {
   getArtist(id: string): Artist | undefined;
   getRelease(id: string): Release | undefined;
   releaseArtistName(r: Release): string;
   saveArtist(a: Artist): Promise<void>;
   saveRelease(r: Release): Promise<void>;
+  setReleaseLabels(id: string, names: string[]): Promise<void>;
 }
 
 let deps: Deps | null = null;
@@ -43,11 +45,19 @@ async function run() {
         const job = jobs.shift()!;
         queued.delete(`${job.kind}:${job.id}`);
         try {
-          if (job.kind === 'release' || job.kind === 'release2') {
+          if (job.kind === 'labels') {
             const r = deps!.getRelease(job.id); if (!r) continue;
-            const res = job.kind === 'release'
-              ? await autoLinkRelease(r, deps!.releaseArtistName(r), { genius: true, wiki: false })
-              : await secondPassRelease(r, deps!.releaseArtistName(r));
+            const res = await findReleaseLabels(r);
+            if (res.names.length) { await deps!.setReleaseLabels(r.id, res.names); state.matched++; }
+            if (res.errors.length) state.errors++;
+            if (res.names.length || !res.errors.length) await deps!.saveRelease({ ...deps!.getRelease(job.id)!, ext: { ...deps!.getRelease(job.id)!.ext, labels_at: now() } });
+            state.last = `${r.artist_credit ?? ''} – ${r.title}${res.names.length ? `: ${res.names.join(', ')}` : ''}`;
+          } else if (job.kind !== 'artist') {
+            const r = deps!.getRelease(job.id); if (!r) continue;
+            const name = deps!.releaseArtistName(r);
+            const res = job.kind === 'release' ? await autoLinkRelease(r, name, { genius: true, wiki: false })
+              : job.kind === 'release2' ? await secondPassRelease(r, name)
+              : await soundcloudPassRelease(r, name);
             await deps!.saveRelease({ ...deps!.getRelease(job.id)!, ...res.patch });
             state.last = `${r.artist_credit ?? ''} – ${r.title}`;
             if (res.found.length) state.matched++;

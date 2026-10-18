@@ -1,7 +1,7 @@
 export type Links = Partial<Record<LinkKey, string>>;
 export type LinkKey =
   | 'apple' | 'genius' | 'youtube' | 'wikipedia' | 'musicbrainz' | 'discogs'
-  | 'rym' | 'aoty' | 'spotify' | 'deezer' | 'instagram' | 'website' | 'pitchfork' | 'metacritic';
+  | 'rym' | 'aoty' | 'spotify' | 'deezer' | 'instagram' | 'website' | 'pitchfork' | 'metacritic' | 'soundcloud';
 
 export interface Ext {
   mbid?: string;          // MusicBrainz artist / release-group id
@@ -36,7 +36,7 @@ export interface Credit {
   role: CreditRole; position: number;
 }
 
-export type EntityType = 'artist' | 'release' | 'track';
+export type EntityType = 'artist' | 'release' | 'track' | 'label';
 export interface Annotation {
   id: string; entity_type: EntityType; entity_id: string;
   rating?: number | null; favorite: boolean; review?: string | null; notes?: string | null;
@@ -59,12 +59,20 @@ export interface Concert {
   rating?: number | null; review?: string | null;
 }
 
+export interface Label {
+  id: string; name: string; aliases: string[]; image_url?: string | null; bio?: string | null;
+  links: Links; ext: Ext; created_at?: string; updated_at?: string;
+}
+export interface ReleaseLabel { id: string; release_id: string; label_id: string }
+export interface ArtistLabel { id: string; artist_id: string; label_id: string }
+
 export interface Tables {
   artists: Artist; releases: Release; tracks: Track; credits: Credit; annotations: Annotation;
   critic_scores: CriticScore; lists: List; list_items: ListItem; concerts: Concert;
+  labels: Label; release_labels: ReleaseLabel; artist_labels: ArtistLabel;
 }
 export type TableName = keyof Tables;
-export const TABLES: TableName[] = ['artists', 'releases', 'tracks', 'credits', 'annotations', 'critic_scores', 'lists', 'list_items', 'concerts'];
+export const TABLES: TableName[] = ['artists', 'releases', 'tracks', 'credits', 'annotations', 'critic_scores', 'lists', 'list_items', 'concerts', 'labels', 'release_labels', 'artist_labels'];
 export type DataSet = { [K in TableName]: Tables[K][] };
 
 export const RELEASE_TYPES = [

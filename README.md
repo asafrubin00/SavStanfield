@@ -29,13 +29,14 @@ Without Supabase configured, the app runs in browser-only mode (IndexedDB). That
 
 ## Setup
 
-1. Create a Supabase project. Run `supabase/schema.sql` in its SQL editor.
+1. Create a Supabase project. Run `supabase/schema.sql` in its SQL editor. (Existing projects: run `supabase/002-labels.sql` to add labels.)
 2. In Supabase → Authentication → URL Configuration, set the Site URL to your deployed URL.
 3. Deploy to Vercel and set these environment variables:
    - `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`
    - `GENIUS_TOKEN`: free, from genius.com/api-clients
    - `YOUTUBE_KEY`: free YouTube Data API v3 key from Google Cloud
-4. Sign in, go to **Import & settings**, upload the spreadsheet, then run **Link artists** and **Link releases**.
+4. Optional: `SOUNDCLOUD_CLIENT_ID` and `SOUNDCLOUD_CLIENT_SECRET` (an app from soundcloud.com/you/apps) for SoundCloud search. Pasted SoundCloud links work without them.
+5. Sign in, go to **Import & settings**, upload the spreadsheet, then run **Link artists** and **Link releases**.
 
 ## Local dev
 

@@ -19,6 +19,9 @@ export interface Adapter {
 }
 
 const CHUNK = 500;
+const OPTIONAL: TableName[] = ['labels', 'release_labels', 'artist_labels'];
+/** Tables the database doesn't have yet (their setup SQL hasn't been run). */
+export const missingTables = new Set<TableName>();
 
 /** Strip the owner column Supabase returns; the app never needs it. */
 function clean<T>(row: T & { owner?: string }): T {
@@ -34,7 +37,11 @@ const cloudAdapter: Adapter = {
       const rows: unknown[] = [];
       for (let from = 0; ; from += 1000) {
         const { data, error } = await supabase!.from(t).select('*').range(from, from + 999);
-        if (error) throw new Error(`Loading ${t}: ${error.message}`);
+        if (error) {
+          // Tables added in later updates may not exist yet until their SQL is run
+          if (OPTIONAL.includes(t) && /does not exist|schema cache|PGRST205|42P01/i.test(`${error.code} ${error.message}`)) { missingTables.add(t); break; }
+          throw new Error(`Loading ${t}: ${error.message}`);
+        }
         rows.push(...data.map(clean));
         if (data.length < 1000) break;
       }
@@ -43,6 +50,7 @@ const cloudAdapter: Adapter = {
     return out;
   },
   async upsert(table, rows) {
+    if (missingTables.has(table)) throw new Error('Labels aren’t set up in Supabase yet — run supabase/002-labels.sql');
     for (let i = 0; i < rows.length; i += CHUNK) {
       const { error } = await supabase!.from(table).upsert(rows.slice(i, i + CHUNK) as never[], { onConflict: 'owner,id' });
       if (error) throw new Error(`Saving ${table}: ${error.message}`);

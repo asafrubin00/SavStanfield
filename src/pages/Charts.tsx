@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
+import { SortSelect } from '../components/controls';
 import { ReleaseTile } from '../components/ui';
 import { useStore } from '../lib/store';
 import { now, uid } from '../lib/util';
@@ -44,7 +45,17 @@ export default function Charts() {
   const inScope = useMemo(() => data.releases.filter((r) =>
     (!decade || (r.year && Math.floor(r.year / 10) * 10 === Number(decade))) && (!year || r.year === Number(year)) && (!type || r.type === type)), [data.releases, decade, year, type]);
   const rated = useMemo(() => inScope.map((r) => ({ r, a: ix.ann.get(`release:${r.id}`) })).filter((x) => x.a?.rating), [inScope, ix]);
-  const top = useMemo(() => rated.filter((x) => x.a!.rating! >= min).sort((x, y) => y.a!.rating! - x.a!.rating! || Number(!!y.a!.favorite) - Number(!!x.a!.favorite) || (x.r.date ?? '').localeCompare(y.r.date ?? '')).map((x) => x.r), [rated, min]);
+  const [exact, setExact] = useState(false);
+  const [topSort, setTopSort] = useState('rating');
+  const top = useMemo(() => {
+    const day = (r: typeof rated[0]['r']) => r.date ?? `${r.year ?? 0}`;
+    const cmp: Record<string, (x: typeof rated[0], y: typeof rated[0]) => number> = {
+      rating: (x, y) => y.a!.rating! - x.a!.rating! || Number(!!y.a!.favorite) - Number(!!x.a!.favorite) || day(x.r).localeCompare(day(y.r)),
+      newest: (x, y) => day(y.r).localeCompare(day(x.r)), oldest: (x, y) => day(x.r).localeCompare(day(y.r)),
+      artist: (x, y) => (x.r.artist_credit ?? '').localeCompare(y.r.artist_credit ?? '') || day(x.r).localeCompare(day(y.r)), title: (x, y) => x.r.title.localeCompare(y.r.title),
+    };
+    return rated.filter((x) => exact ? x.a!.rating === min : x.a!.rating! >= min).sort(cmp[topSort] ?? cmp.rating).map((x) => x.r);
+  }, [rated, min, exact, topSort]);
 
   const perYear = useMemo(() => {
     const m = new Map<number, number>(); for (const r of inScope) if (r.year && r.year <= new Date().getFullYear() + 1) m.set(r.year, (m.get(r.year) ?? 0) + 1);
@@ -78,7 +89,7 @@ export default function Charts() {
 
   async function saveAsList() {
     const id = uid();
-    await upsert('lists', [{ id, name: `Top rated — ${scopeName}`, description: `Your ${min}★-and-up releases, saved ${new Date().toLocaleDateString('en-GB')}`, ranked: true, created_at: now(), updated_at: now() }]);
+    await upsert('lists', [{ id, name: `Top rated — ${scopeName}`, description: `Your ${min}★${exact ? '' : '-and-up'} releases, saved ${new Date().toLocaleDateString('en-GB')}`, ranked: true, created_at: now(), updated_at: now() }]);
     await upsert('list_items', top.slice(0, 100).map((r, i) => ({ id: uid(), list_id: id, entity_type: 'release' as const, entity_id: r.id, position: i + 1 })));
     say('Saved as a list'); nav(`/list/${id}`);
   }
@@ -95,12 +106,14 @@ export default function Charts() {
 
       <h2 className="h-sec">Your top rated <span className="muted">{scopeName}</span></h2>
       <div className="row" style={{ marginBottom: 14 }}>
-        <div className="seg">{[5, 4, 3].map((n) => <button key={n} className={min === n ? 'on' : ''} onClick={() => setMin(n)}>{n === 5 ? '5★ only' : `${n}★ and up`}</button>)}</div>
+        <div className="seg">{[5, 4, 3, 2, 1].map((n) => <button key={n} className={min === n ? 'on' : ''} onClick={() => setMin(n)}>{'★'.repeat(n)}</button>)}</div>
+        <div className="seg"><button className={!exact ? 'on' : ''} onClick={() => setExact(false)}>and up</button><button className={exact ? 'on' : ''} onClick={() => setExact(true)}>exactly</button></div>
+        <SortSelect value={topSort} onChange={setTopSort} options={[['rating', 'Highest rated'], ['newest', 'Newest first'], ['oldest', 'Oldest first'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z']]} />
         <span className="muted">{top.length}</span><span className="spacer" />
         <button className="btn" disabled={!top.length} onClick={saveAsList}>Save as a list</button>
       </div>
-      {top.length ? <div className="grid tight">{top.slice(0, 60).map((r) => <ReleaseTile key={r.id} r={r} />)}</div> : <div className="empty">Nothing rated {min}★ or higher here yet.</div>}
-      {top.length > 60 && <p className="muted"><Link to={`/library?rating=${min}&sort=rating${decade ? `&decade=${decade}` : ''}${type ? `&type=${encodeURIComponent(type)}` : ''}`}>See all {top.length} in the library</Link></p>}
+      {top.length ? <div className="grid tight">{top.slice(0, 60).map((r) => <ReleaseTile key={r.id} r={r} />)}</div> : <div className="empty">Nothing rated {exact ? 'exactly' : ''} {min}★{exact ? '' : ' or higher'} here yet.</div>}
+      {top.length > 60 && <p className="muted"><Link to={`/library?rating=${exact ? `eq${min}` : min === 5 ? 'eq5' : min === 1 ? 'rated' : `ge${min}`}&sort=rating${decade ? `&decade=${decade}` : ''}${type ? `&type=${encodeURIComponent(type)}` : ''}`}>See all {top.length} in the library</Link></p>}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '8px 40px' }}>
         <section><h2 className="h-sec">Releases by year</h2>{perYear.length ? <Columns rows={perYear} /> : <div className="muted">No dated releases.</div>}</section>

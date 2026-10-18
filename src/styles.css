@@ -181,3 +181,5 @@ h1, h2, h3 { margin: 0; line-height: 1.1; }
 .progress > div { height: 100%; background: var(--accent); }
 details summary { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+
+.full-select .select { width: 100%; }

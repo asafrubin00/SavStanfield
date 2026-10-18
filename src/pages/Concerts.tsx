@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
+import { SortSelect, usePref } from '../components/controls';
 import { fmtDate, Stars } from '../components/ui';
 import { useStore } from '../lib/store';
 import type { Concert } from '../lib/types';
@@ -10,11 +11,14 @@ export default function Concerts() {
   const { data, upsert, remove } = st;
   const blank = { date: '', artist: '', tour: '', venue: '', location: '', support: '' };
   const [f, setF] = useState(blank);
-  const rows = [...data.concerts].sort((a, b) => (b.date ?? '').localeCompare(a.date ?? ''));
+  const [sort, setSort] = usePref('concerts.sort', 'newest');
+  const rows = [...data.concerts].sort(sort === 'oldest' ? (a, b) => (a.date ?? '').localeCompare(b.date ?? '') : sort === 'rating' ? (a, b) => (b.rating ?? 0) - (a.rating ?? 0)
+    : sort === 'artist' ? (a, b) => (a.artist_credit ?? '').localeCompare(b.artist_credit ?? '') : sort === 'city' ? (a, b) => (a.location ?? '').localeCompare(b.location ?? '') : (a, b) => (b.date ?? '').localeCompare(a.date ?? ''));
   const set = (c: Concert, p: Partial<Concert>) => upsert('concerts', [{ ...c, ...p }]);
   return (
     <div>
-      <div className="row" style={{ marginBottom: 20 }}><h1 className="h-page">Concerts</h1></div>
+      <div className="row" style={{ marginBottom: 20 }}><h1 className="h-page">Concerts</h1><span className="spacer" />
+        <SortSelect value={sort} onChange={setSort} options={[['newest', 'Newest first'], ['oldest', 'Oldest first'], ['rating', 'Your rating'], ['artist', 'Artist A–Z'], ['city', 'City A–Z']]} /></div>
       <form className="panel form-grid" style={{ marginBottom: 24, gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }} onSubmit={async (e) => {
         e.preventDefault(); if (!f.artist.trim()) return;
         const { artist } = st.ensureArtist(f.artist.trim());

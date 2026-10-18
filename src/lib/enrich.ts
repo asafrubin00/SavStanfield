@@ -1,6 +1,6 @@
 import { mergeLinks } from './links';
 import {
-  appleFindAlbum, appleSearchArtists, ARTIST_OK, artistMatch, bestMatch, caaCover, deezerAlbum, deezerArtist, deezerSearchAlbums,
+  appleAlbumLabel, appleFindAlbum, appleSearchArtists, deezerAlbumLabel, mbGroupLabels, soundcloudSearch, ARTIST_OK, artistMatch, bestMatch, caaCover, deezerAlbum, deezerArtist, deezerSearchAlbums,
   fuzzy, fuzzyArtist, geniusSearch, geniusSong, mbLinks, mbSearchArtists, mbSearchGroups, mbSearchGroupsLoose, TITLE_OK,
   titleScore, wikiSearch, wikiSummary, wikidataToWikipedia,
 } from './sources';
@@ -161,4 +161,37 @@ export async function secondPassRelease(rel: Release, artistName: string): Promi
   ext.pass2_at = now();
   const year = date ? Number(date.slice(0, 4)) : rel.year;
   return { patch: { links, ext, artwork_url: artwork, date, year, updated_at: now() }, found, errors };
+}
+
+/** Labels for a release from Deezer, then MusicBrainz, then Apple's copyright line. */
+export async function findReleaseLabels(rel: Release): Promise<{ names: string[]; source: string | null; errors: string[] }> {
+  const errors: string[] = [];
+  const tries: [string, () => Promise<string[]>][] = [];
+  const dz: [string, () => Promise<string[]>] | null = rel.ext.deezer_id ? ['Deezer', () => deezerAlbumLabel(rel.ext.deezer_id as number)] : null;
+  const mb: [string, () => Promise<string[]>] | null = rel.ext.mbid ? ['MusicBrainz', () => mbGroupLabels(rel.ext.mbid as string)] : null;
+  // Streaming services list today's rights holder (often a reissue label), so for older records MusicBrainz's original pressing goes first
+  const old = (rel.year ?? 9999) < 2008;
+  for (const t of old ? [mb, dz] : [dz, mb]) if (t) tries.push(t);
+  if (rel.ext.apple_id) tries.push(['Apple Music', () => appleAlbumLabel(rel.ext.apple_id as number)]);
+  for (const [source, fn] of tries) {
+    const names = await safe(fn(), errors, source);
+    if (names?.length) return { names, source, errors };
+  }
+  return { names: [], source: null, errors };
+}
+
+/** SoundCloud pass: albums/playlists (and tracks for singles) for releases still without a cover. */
+export async function soundcloudPassRelease(rel: Release, artistName: string): Promise<EnrichResult<Release>> {
+  const errors: string[] = []; const found: string[] = [];
+  const credit = rel.artist_credit || artistName;
+  const kinds: ('playlist' | 'track')[] = /single|guest/i.test(rel.type) ? ['track', 'playlist'] : ['playlist'];
+  const list = await safe(soundcloudSearch(`${artistName} ${rel.title}`, kinds), errors, 'SoundCloud') ?? [];
+  const m = bestMatch(list, rel.title, credit, (x) => ({ title: x.title, artist: x.artist }));
+  // Only mark as done if SoundCloud actually answered (so a missing key or outage can be retried)
+  const patch: Partial<Release> = { ext: errors.length ? { ...rel.ext } : { ...rel.ext, sc_at: now() }, updated_at: now() };
+  if (m) {
+    patch.links = mergeLinks(rel.links, { soundcloud: m.item.url });
+    if (!rel.artwork_url && m.item.artwork) { patch.artwork_url = m.item.artwork; found.push('SoundCloud cover'); } else found.push('SoundCloud');
+  }
+  return { patch, found, errors };
 }

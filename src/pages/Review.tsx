@@ -4,14 +4,14 @@ import { Cover } from '../components/ui';
 import { mergeLinks } from '../lib/links';
 import {
   appleSearchAlbums, caaCover, caaThumb, deezerSearchAlbums, fuzzyArtist, fuzzyTitle, geniusSearch, geniusSong,
-  mbLinks, mbSearchGroupsLoose, wikidataToWikipedia,
+  isSoundcloud, mbLinks, mbSearchGroupsLoose, soundcloudOembed, soundcloudSearch, wikidataToWikipedia,
 } from '../lib/sources';
 import { releaseArtists, useStore } from '../lib/store';
 import type { Release } from '../lib/types';
 import { now } from '../lib/util';
 
 interface Cand {
-  key: string; source: 'Apple Music' | 'Deezer' | 'MusicBrainz' | 'Genius';
+  key: string; source: 'Apple Music' | 'Deezer' | 'MusicBrainz' | 'Genius' | 'SoundCloud';
   title: string; artist: string; year?: string; thumb?: string; score: number;
   apply: (r: Release) => Promise<Partial<Release>>;
 }
@@ -50,7 +50,7 @@ export default function Review() {
     const id = ++req.current;
     const credit = rel.artist_credit ?? '';
     const score = (t: string, a: string) => fuzzyTitle(t, rel.title, a) * 0.6 + fuzzyArtist(credit, a) * 0.4;
-    setCands({ Deezer: 'loading', MusicBrainz: 'loading', Genius: 'loading', 'Apple Music': 'loading' });
+    setCands({ Deezer: 'loading', MusicBrainz: 'loading', Genius: 'loading', 'Apple Music': 'loading', SoundCloud: 'loading' });
     const put = (k: string, v: Cand[] | string) => { if (req.current === id) setCands((c) => ({ ...c, [k]: v })); };
     const sorted = (xs: Cand[]) => xs.sort((a, b) => b.score - a.score).slice(0, 6);
 
@@ -77,6 +77,11 @@ export default function Review() {
         return { artwork_url: cover ?? x.artwork_url, links: mergeLinks(x.links, { genius: s.album?.url ?? s.url }) };
       },
     }))))).catch((e) => put('Genius', e.message));
+
+    soundcloudSearch(term, ['playlist', 'track']).then((xs) => put('SoundCloud', sorted(xs.map((s) => ({
+      key: `sc${s.kind}${s.id}`, source: 'SoundCloud' as const, title: s.title, artist: s.artist, year: s.year, thumb: s.artwork, score: score(s.title, s.artist),
+      apply: async (x: Release) => ({ artwork_url: s.artwork ?? x.artwork_url, links: mergeLinks(x.links, { soundcloud: s.url }) }),
+    }))))).catch((e) => put('SoundCloud', e.message));
 
     appleSearchAlbums(term, 8).then((xs) => put('Apple Music', sorted(xs.map((a) => ({
       key: `ap${a.id}`, source: 'Apple Music' as const, title: a.title, artist: a.artist, year: a.date?.slice(0, 4), thumb: a.artwork?.replace('1200x1200bb', '200x200bb'), score: score(a.title, a.artist),
@@ -106,7 +111,17 @@ export default function Review() {
     } catch (e) { say((e as Error).message); } finally { setBusy(false); }
   }
 
-  const flat = (['Deezer', 'Apple Music', 'MusicBrainz', 'Genius'] as const).flatMap((k) => Array.isArray(cands[k]) ? cands[k] as Cand[] : []);
+  async function applyPasted() {
+    if (!r) return;
+    const u = paste.trim();
+    if (isSoundcloud(u)) {
+      const o = await soundcloudOembed(u);
+      if (!o) { say('Couldn’t read that SoundCloud link'); return; }
+      await save({ links: mergeLinks(r.links, { soundcloud: u }), artwork_url: o.thumb ?? r.artwork_url }, o.thumb ? 'Saved from SoundCloud' : 'SoundCloud linked — no cover there');
+    } else await save({ artwork_url: u }, 'Cover saved');
+  }
+
+  const flat = (['Deezer', 'Apple Music', 'MusicBrainz', 'Genius', 'SoundCloud'] as const).flatMap((k) => Array.isArray(cands[k]) ? cands[k] as Cand[] : []);
   const ranked = [...flat].sort((a, b) => b.score - a.score);
   const shortcut = new Map(ranked.slice(0, 9).map((c, i) => [c.key, i + 1]));
 
@@ -155,11 +170,11 @@ export default function Review() {
           <form className="row" style={{ marginBottom: 18 }} onSubmit={(e) => { e.preventDefault(); void search(r, q); }}>
             <input className="input" style={{ flex: 1, minWidth: 200 }} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search terms" />
             <button className="btn">Search again</button>
-            <input className="input" style={{ flex: 1, minWidth: 200 }} placeholder="…or paste an image URL" value={paste} onChange={(e) => setPaste(e.target.value)} />
-            <button type="button" className="btn" disabled={!/^https?:\/\//.test(paste)} onClick={() => save({ artwork_url: paste.trim() }, 'Cover saved')}>Use image</button>
+            <input className="input" style={{ flex: 1, minWidth: 200 }} placeholder="…or paste an image URL or SoundCloud link" value={paste} onChange={(e) => setPaste(e.target.value)} />
+            <button type="button" className="btn" disabled={!/^https?:\/\//.test(paste)} onClick={applyPasted}>Use this</button>
           </form>
 
-          {(['Deezer', 'Apple Music', 'MusicBrainz', 'Genius'] as const).map((src) => {
+          {(['Deezer', 'Apple Music', 'SoundCloud', 'MusicBrainz', 'Genius'] as const).map((src) => {
             const v = cands[src];
             return (
               <section key={src} style={{ marginBottom: 18 }}>

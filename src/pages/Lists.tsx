@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
+import { SortSelect, usePref } from '../components/controls';
 import { Cover, QuickRate } from '../components/ui';
 import { norm, useStore, type Index } from '../lib/store';
 import type { ListItem } from '../lib/types';
@@ -8,6 +9,7 @@ import { now, uid } from '../lib/util';
 function itemView(ix: Index, it: ListItem) {
   if (it.entity_type === 'release') { const r = ix.releases.get(it.entity_id!); return r && { to: `/release/${r.id}`, title: r.title, sub: `${r.artist_credit} · ${r.year ?? ''}`, img: r.artwork_url, round: false }; }
   if (it.entity_type === 'artist') { const a = ix.artists.get(it.entity_id!); return a && { to: `/artist/${a.id}`, title: a.name, sub: 'Artist', img: a.image_url, round: true }; }
+  if (it.entity_type === 'label') { const l = ix.labels.get(it.entity_id!); return l && { to: `/label/${l.id}`, title: l.name, sub: 'Label', img: l.image_url, round: false }; }
   if (it.entity_type === 'track') { const t = ix.tracks.get(it.entity_id!); const r = t?.release_id ? ix.releases.get(t.release_id) : undefined; return t && { to: `/track/${t.id}`, title: t.title, sub: `${t.artist_credit ?? r?.artist_credit ?? ''}${r ? ` · ${r.title}` : ''}`, img: r?.artwork_url, round: false }; }
   return { to: '', title: it.label ?? '', sub: 'Not in your library yet', img: null, round: false };
 }
@@ -16,10 +18,14 @@ export function Lists() {
   const { data, ix, upsert } = useStore();
   const nav = useNavigate();
   const [name, setName] = useState('');
-  const lists = [...data.lists].sort((a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
+  const [sort, setSort] = usePref('lists.sort', 'updated');
+  const size = (id: string) => ix.itemsByList.get(id)?.length ?? 0;
+  const lists = [...data.lists].sort(sort === 'az' ? (a, b) => a.name.localeCompare(b.name) : sort === 'created' ? (a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')
+    : sort === 'size' ? (a, b) => size(b.id) - size(a.id) : (a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
   return (
     <div>
-      <div className="row" style={{ marginBottom: 20 }}><h1 className="h-page">Lists</h1></div>
+      <div className="row" style={{ marginBottom: 20 }}><h1 className="h-page">Lists</h1><span className="spacer" />
+        <SortSelect value={sort} onChange={setSort} options={[['updated', 'Recently changed'], ['created', 'Newest'], ['az', 'A–Z'], ['size', 'Biggest']]} /></div>
       <form className="row" style={{ marginBottom: 24 }} onSubmit={async (e) => { e.preventDefault(); if (!name.trim()) return; const id = uid(); await upsert('lists', [{ id, name: name.trim(), ranked: true, created_at: now(), updated_at: now() }]); nav(`/list/${id}`); }}>
         <input className="input" style={{ width: 300 }} placeholder="New list name, e.g. Best of 2026" value={name} onChange={(e) => setName(e.target.value)} />
         <button className="btn primary" disabled={!name.trim()}>Create list</button>
@@ -49,6 +55,8 @@ export default function ListPage() {
   const items = useMemo(() => [...(ix.itemsByList.get(id!) ?? [])].sort((a, b) => a.position - b.position), [ix, id]);
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('');
+  const [itemSort, setItemSort] = useState('order');
+  const [compact, setCompact] = usePref('list.compact', false);
   const results = useMemo(() => {
     const n = norm(q); if (n.length < 2) return [];
     return [
@@ -66,7 +74,15 @@ export default function ListPage() {
     await upsert('list_items', [{ id: uid(), list_id: l.id, entity_type: type, entity_id: eid, label: label ?? null, position: (items.at(-1)?.position ?? 0) + 1 }]); void touch(); setQ('');
   };
   const fn = norm(filter);
-  const shownItems = items.filter((it) => !fn || norm(`${itemView(ix, it)?.title} ${itemView(ix, it)?.sub} ${it.note ?? ''}`).includes(fn));
+  const rel = (it: ListItem) => it.entity_type === 'release' ? ix.releases.get(it.entity_id!) : it.entity_type === 'track' ? ix.releases.get(ix.tracks.get(it.entity_id!)?.release_id ?? '') : undefined;
+  const day = (it: ListItem) => { const r = rel(it); return r?.date ?? (r?.year ? String(r.year) : ''); };
+  const rt = (it: ListItem) => it.entity_id ? ix.ann.get(`${it.entity_type}:${it.entity_id}`)?.rating ?? 0 : 0;
+  const ttl = (it: ListItem) => itemView(ix, it)?.title ?? '';
+  const sorted = itemSort === 'order' ? items : [...items].sort(
+    itemSort === 'rating' ? (a, b) => rt(b) - rt(a) : itemSort === 'newest' ? (a, b) => day(b).localeCompare(day(a))
+      : itemSort === 'oldest' ? (a, b) => (day(a) || '9999').localeCompare(day(b) || '9999') : (a, b) => ttl(a).localeCompare(ttl(b)));
+  const shownItems = sorted.filter((it) => !fn || norm(`${itemView(ix, it)?.title} ${itemView(ix, it)?.sub} ${it.note ?? ''}`).includes(fn));
+  const canMove = itemSort === 'order' && !fn;
 
   return (
     <div>
@@ -74,6 +90,8 @@ export default function ListPage() {
       <input className="input" style={{ width: '100%', marginTop: 10, background: 'transparent' }} placeholder="Add a description" value={l.description ?? ''} onChange={(e) => upsert('lists', [{ ...l, description: e.target.value }])} />
       <div className="row" style={{ margin: '16px 0 22px' }}>
         <label className="row"><input type="checkbox" checked={l.ranked} onChange={(e) => upsert('lists', [{ ...l, ranked: e.target.checked }])} /> Ranked</label>
+        <SortSelect value={itemSort} onChange={setItemSort} options={[['order', l.ranked ? 'Ranking' : 'List order'], ['rating', 'Your rating'], ['newest', 'Newest first'], ['oldest', 'Oldest first'], ['title', 'A–Z']]} />
+        <div className="seg" role="group" aria-label="View"><button className={!compact ? 'on' : ''} onClick={() => setCompact(false)}>Roomy</button><button className={compact ? 'on' : ''} onClick={() => setCompact(true)}>Compact</button></div>
         <span className="muted">{items.length} items</span>
         {items.length > 12 && <input className="input" placeholder="Filter this list" value={filter} onChange={(e) => setFilter(e.target.value)} />}
         <span className="spacer" />
@@ -91,6 +109,21 @@ export default function ListPage() {
         <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{shownItems.map((it) => {
           const i = items.indexOf(it); const v = itemView(ix, it);
           return (
+            compact ? (
+            <li key={it.id} style={{ display: 'grid', gridTemplateColumns: `${l.ranked ? '34px ' : ''}28px minmax(0, 1.4fr) minmax(0, 1fr) 190px`, gap: 10, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--line)', fontSize: 14 }}>
+              {l.ranked && <span className="num muted" style={{ textAlign: 'right', fontWeight: 700 }}>{i + 1}</span>}
+              <Cover src={v?.img} title={v?.title ?? '?'} size={28} round={v?.round} />
+              <span style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                {v?.to ? <Link to={v.to} style={{ fontWeight: 600 }}>{v.title}</Link> : <strong>{v?.title ?? 'Removed from library'}</strong>}
+                <span className="muted"> · {v?.sub}</span></span>
+              <input className="input small" style={{ background: 'transparent', borderColor: 'transparent', padding: '2px 6px' }} placeholder="Add a note" defaultValue={it.note ?? ''}
+                onBlur={(e) => e.target.value !== (it.note ?? '') && upsert('list_items', [{ ...it, note: e.target.value || null }])} />
+              <div className="row" style={{ flexWrap: 'nowrap', gap: 2, justifyContent: 'flex-end' }}>
+                {it.entity_type !== 'text' && it.entity_id && <QuickRate type={it.entity_type} id={it.entity_id} />}
+                {l.ranked && <><button className="btn sm ghost" aria-label="Move up" disabled={i === 0 || !canMove} onClick={() => move(i, -1)}>↑</button><button className="btn sm ghost" aria-label="Move down" disabled={i === items.length - 1 || !canMove} onClick={() => move(i, 1)}>↓</button></>}
+                <button className="btn sm ghost" aria-label="Remove" onClick={async () => { await remove('list_items', [it.id]); }}>✕</button>
+              </div>
+            </li>) : (
             <li key={it.id} style={{ display: 'grid', gridTemplateColumns: `${l.ranked ? '44px ' : ''}56px 1fr auto`, gap: 14, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
               {l.ranked && <span className="num" style={{ fontSize: 26, fontWeight: 800, fontVariationSettings: "'wdth' 70", textAlign: 'right', color: 'var(--muted)' }}>{i + 1}</span>}
               <Cover src={v?.img} title={v?.title ?? '?'} size={56} round={v?.round} />
@@ -102,10 +135,10 @@ export default function ListPage() {
               </div>
               <div className="row" style={{ flexWrap: 'nowrap', gap: 4 }}>
                 {it.entity_type !== 'text' && it.entity_id && <QuickRate type={it.entity_type} id={it.entity_id} />}
-                {l.ranked && <><button className="btn sm ghost" aria-label="Move up" disabled={i === 0 || !!fn} onClick={() => move(i, -1)}>Up</button><button className="btn sm ghost" aria-label="Move down" disabled={i === items.length - 1 || !!fn} onClick={() => move(i, 1)}>Down</button></>}
+                {l.ranked && <><button className="btn sm ghost" aria-label="Move up" disabled={i === 0 || !canMove} onClick={() => move(i, -1)}>Up</button><button className="btn sm ghost" aria-label="Move down" disabled={i === items.length - 1 || !canMove} onClick={() => move(i, 1)}>Down</button></>}
                 <button className="btn sm ghost" onClick={async () => { await remove('list_items', [it.id]); }}>Remove</button>
               </div>
-            </li>);
+            </li>));
         })}</ol>
       )}
     </div>

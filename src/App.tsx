@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { Cover } from './components/ui';
-import { mode, supabase } from './lib/db';
+import { missingTables, mode, supabase } from './lib/db';
 import { linkQueue, useLinkQueue } from './lib/queue';
 import { norm, releaseArtists, StoreProvider, useStore } from './lib/store';
 import ArtistPage from './pages/ArtistPage';
@@ -14,6 +14,7 @@ import Library from './pages/Library';
 import ListPage, { Lists } from './pages/Lists';
 import ReleasePage from './pages/ReleasePage';
 import Review, { needsReview } from './pages/Review';
+import LabelPage, { Labels } from './pages/Labels';
 import Settings from './pages/Settings';
 import TrackPage from './pages/TrackPage';
 
@@ -85,7 +86,7 @@ function QueueStatus() {
 }
 
 function Shell() {
-  const { data, ix, loading, error, toast, upsert } = useStore();
+  const { data, ix, loading, error, toast, upsert, setReleaseLabels } = useStore();
   const [menu, setMenu] = useState(false);
   const loc = useLocation();
   useEffect(() => { setMenu(false); window.scrollTo(0, 0); }, [loc.pathname]);
@@ -93,14 +94,14 @@ function Shell() {
     linkQueue.configure({
       getArtist: (id) => ix.artists.get(id), getRelease: (id) => ix.releases.get(id),
       releaseArtistName: (r) => releaseArtists(ix, r.id)[0]?.name ?? r.artist_credit ?? '',
-      saveArtist: (a) => upsert('artists', [a]), saveRelease: (r) => upsert('releases', [r]),
+      saveArtist: (a) => upsert('artists', [a]), saveRelease: (r) => upsert('releases', [r]), setReleaseLabels,
     });
-  }, [ix, upsert]);
+  }, [ix, upsert, setReleaseLabels]);
   const producers = useMemo(() => data.artists.filter((a) => a.is_producer).length, [data.artists]);
   const toReview = useMemo(() => { const t = new Date().toISOString().slice(0, 10); return data.releases.filter((r) => needsReview(r, t)).length; }, [data.releases]);
   const nav: [string, string, number | null][] = [
     ['/', 'Home', null], ['/library', 'Library', data.releases.length], ['/artists', 'Artists', data.artists.length],
-    ['/producers', 'Producers', producers], ['/lists', 'Lists', data.lists.length], ['/charts', 'Charts', null],
+    ['/producers', 'Producers', producers], ['/labels', 'Labels', data.labels.length], ['/lists', 'Lists', data.lists.length], ['/charts', 'Charts', null],
     ['/concerts', 'Concerts', data.concerts.length],
   ];
   return (
@@ -125,6 +126,7 @@ function Shell() {
           <QueueStatus />
         </header>
         <main className="page">
+          {missingTables.size > 0 && <div className="panel" style={{ marginBottom: 20, borderColor: 'var(--accent)' }}>One-time setup: labels need a small database update. In Supabase, open the SQL Editor, paste in <code>supabase/002-labels.sql</code> from the repo, click Run, then reload this page.</div>}
           {loading ? <div className="muted">Loading your library…</div> : error ? <div className="empty">Couldn't load your library: {error}</div> : (
             <Routes>
               <Route path="/" element={<Home />} />
@@ -140,6 +142,8 @@ function Shell() {
               <Route path="/concerts" element={<Concerts />} />
               <Route path="/find" element={<Find />} />
               <Route path="/review" element={<Review />} />
+              <Route path="/labels" element={<Labels />} />
+              <Route path="/label/:id" element={<LabelPage />} />
               <Route path="/settings" element={<Settings />} />
               <Route path="*" element={<div className="empty">That page doesn't exist. <Link to="/">Go home</Link></div>} />
             </Routes>

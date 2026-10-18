@@ -25,8 +25,26 @@ const SOURCES: Record<string, (path: string, qs: URLSearchParams, env: Env) => {
   },
   wiki: (p, qs) => ({ url: `https://en.wikipedia.org/${p}?${qs}`, headers: { 'User-Agent': UA } }),
   wikidata: (p, qs) => ({ url: `https://www.wikidata.org/${p}?${qs}`, headers: { 'User-Agent': UA } }),
+  scoembed: (_p, qs) => { qs.set('format', 'json'); return { url: `https://soundcloud.com/oembed?${qs}` }; },
+  soundcloud: () => 'handled separately',
   caa: (p) => ({ url: `https://coverartarchive.org/${p}`, headers: { 'User-Agent': UA } }),
 };
+
+// SoundCloud: app credentials → short-lived token, cached per server instance.
+let scToken: { token: string; exp: number } | null = null;
+async function soundcloudToken(env: Env): Promise<string | null> {
+  if (!env.SOUNDCLOUD_CLIENT_ID || !env.SOUNDCLOUD_CLIENT_SECRET) return null;
+  if (scToken && scToken.exp > Date.now()) return scToken.token;
+  const r = await fetch('https://secure.soundcloud.com/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json; charset=utf-8', Authorization: `Basic ${btoa(`${env.SOUNDCLOUD_CLIENT_ID}:${env.SOUNDCLOUD_CLIENT_SECRET}`)}` },
+    body: 'grant_type=client_credentials',
+  });
+  if (!r.ok) throw new Error(`SoundCloud sign-in failed (${r.status})`);
+  const j = await r.json() as { access_token: string; expires_in?: number };
+  scToken = { token: j.access_token, exp: Date.now() + Math.max(60, (j.expires_in ?? 3600) - 120) * 1000 };
+  return scToken.token;
+}
 
 const verified = new Map<string, number>();
 
@@ -52,6 +70,15 @@ export async function proxy(rawQuery: string, authHeader: string | undefined, en
   if (!make) return { status: 400, body: JSON.stringify({ error: `Unknown source "${src}"` }), type: 'application/json' };
   if (path.includes('..')) return { status: 400, body: JSON.stringify({ error: 'Bad path' }), type: 'application/json' };
   if (!(await authorised(authHeader, env))) return { status: 401, body: JSON.stringify({ error: 'Sign in first' }), type: 'application/json' };
+  if (src === 'soundcloud') {
+    try {
+      const token = await soundcloudToken(env);
+      if (!token) return { status: 501, body: JSON.stringify({ error: 'SoundCloud not set up (SOUNDCLOUD_CLIENT_ID / SOUNDCLOUD_CLIENT_SECRET)' }), type: 'application/json' };
+      const r = await fetch(`https://api.soundcloud.com/${path}?${qs}`, { headers: { Accept: 'application/json; charset=utf-8', Authorization: `OAuth ${token}` } });
+      if (r.status === 401) scToken = null;
+      return { status: r.status, body: await r.text(), type: 'application/json' };
+    } catch (e) { return { status: 502, body: JSON.stringify({ error: (e as Error).message }), type: 'application/json' }; }
+  }
   const target = make(path, qs, env);
   if (typeof target === 'string') return { status: 501, body: JSON.stringify({ error: target }), type: 'application/json' };
   try {

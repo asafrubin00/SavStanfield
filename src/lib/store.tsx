@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { adapter, emptyData } from './db';
-import { annId, norm, now, uid } from './util';
-import type { Annotation, Artist, Credit, CriticScore, DataSet, EntityType, ListItem, Release, TableName, Tables, Track } from './types';
+import { annId, labelKey, norm, now, uid } from './util';
+import type { Annotation, Artist, Credit, CriticScore, DataSet, EntityType, Label, ListItem, Release, TableName, Tables, Track } from './types';
 
 function groupBy<T>(rows: T[], key: (r: T) => string | null | undefined) {
   const m = new Map<string, T[]>();
@@ -24,7 +24,32 @@ function buildIndex(d: DataSet) {
     scoresByRelease: groupBy(d.critic_scores, (s) => s.release_id),
     itemsByList: groupBy(d.list_items, (i) => i.list_id),
     artistByName: new Map(d.artists.flatMap((a) => [a.name, ...a.aliases].map((n) => [norm(n), a] as const))),
+    labels: byId(d.labels),
+    labelByName: new Map(d.labels.flatMap((l) => [l.name, ...l.aliases].map((n) => [labelKey(n), l] as const))),
+    releaseLabelsByRelease: groupBy(d.release_labels, (x) => x.release_id),
+    releaseLabelsByLabel: groupBy(d.release_labels, (x) => x.label_id),
+    artistLabelsByArtist: groupBy(d.artist_labels, (x) => x.artist_id),
+    artistLabelsByLabel: groupBy(d.artist_labels, (x) => x.label_id),
+    ...recency(d),
   };
+}
+
+const releaseDay = (r: Release) => r.date ?? (r.year ? `${r.year}-01-01` : '');
+/** Most recent (already out) release date per artist and per label — for "recently released" sorting. */
+function recency(d: DataSet) {
+  const today = new Date().toISOString().slice(0, 10);
+  const rel = new Map(d.releases.map((r) => [r.id, releaseDay(r)]));
+  const lastByArtist = new Map<string, string>(); const lastProducedByArtist = new Map<string, string>();
+  const trackRel = new Map(d.tracks.map((t) => [t.id, t.release_id]));
+  for (const c of d.credits) {
+    const rid = c.release_id ?? (c.track_id ? trackRel.get(c.track_id) : null); if (!rid) continue;
+    const day = rel.get(rid); if (!day || day > today) continue;
+    const m = c.role === 'primary' ? lastByArtist : c.role === 'producer' || c.role === 'exec_producer' ? lastProducedByArtist : null;
+    if (m && (m.get(c.artist_id) ?? '') < day) m.set(c.artist_id, day);
+  }
+  const lastByLabel = new Map<string, string>();
+  for (const x of d.release_labels) { const day = rel.get(x.release_id); if (day && day <= today && (lastByLabel.get(x.label_id) ?? '') < day) lastByLabel.set(x.label_id, day); }
+  return { lastByArtist, lastProducedByArtist, lastByLabel };
 }
 export type Index = ReturnType<typeof buildIndex>;
 export { norm, annId };
@@ -43,6 +68,10 @@ interface Store {
   addToList(listId: string, entity_type: ListItem['entity_type'], entity_id: string): Promise<void>;
   deleteRelease(id: string): Promise<void>;
   deleteArtist(id: string): Promise<void>;
+  ensureLabel(name: string): Label;
+  setReleaseLabels(releaseId: string, names: string[]): Promise<void>;
+  setArtistLabels(artistId: string, names: string[]): Promise<void>;
+  deleteLabel(id: string): Promise<void>;
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -149,6 +178,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await remove('critic_scores', d.critic_scores.filter((s) => s.release_id === id).map((s) => s.id));
     await remove('annotations', [annId('release', id), ...trackIds.map((t) => annId('track', t))].filter((k) => ixRef.current.ann.has(k)));
     await remove('list_items', d.list_items.filter((i) => i.entity_id === id || (i.entity_id && tset.has(i.entity_id))).map((i) => i.id));
+    await remove('release_labels', d.release_labels.filter((x) => x.release_id === id).map((x) => x.id)).catch(() => undefined);
     await remove('releases', [id]);
   }, [remove]);
 
@@ -157,10 +187,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await remove('credits', d.credits.filter((c) => c.artist_id === id).map((c) => c.id));
     await remove('list_items', d.list_items.filter((i) => i.entity_id === id).map((i) => i.id));
     if (ixRef.current.ann.has(annId('artist', id))) await remove('annotations', [annId('artist', id)]);
+    await remove('artist_labels', d.artist_labels.filter((x) => x.artist_id === id).map((x) => x.id)).catch(() => undefined);
     await remove('artists', [id]);
   }, [remove]);
 
-  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist };
+  const pendingLabels = useRef(new Map<string, Label>());
+  const ensureLabel = useCallback((name: string) => {
+    const k = labelKey(name);
+    const found = ixRef.current.labelByName.get(k) ?? pendingLabels.current.get(k);
+    if (found) return found;
+    const l: Label = { id: uid(), name: name.trim(), aliases: [], links: {}, ext: {}, created_at: now(), updated_at: now() };
+    pendingLabels.current.set(k, l);
+    void upsert('labels', [l]).finally(() => pendingLabels.current.delete(k));
+    return l;
+  }, [upsert]);
+
+  const setReleaseLabels = useCallback(async (releaseId: string, names: string[]) => {
+    const want = [...new Set(names.map((n) => n.trim()).filter(Boolean))].map((n) => ensureLabel(n));
+    const cur = ixRef.current.releaseLabelsByRelease.get(releaseId) ?? [];
+    await remove('release_labels', cur.filter((x) => !want.some((l) => l.id === x.label_id)).map((x) => x.id));
+    await upsert('release_labels', want.filter((l) => !cur.some((x) => x.label_id === l.id)).map((l) => ({ id: uid(), release_id: releaseId, label_id: l.id })));
+  }, [ensureLabel, remove, upsert]);
+
+  const setArtistLabels = useCallback(async (artistId: string, names: string[]) => {
+    const want = [...new Set(names.map((n) => n.trim()).filter(Boolean))].map((n) => ensureLabel(n));
+    const cur = ixRef.current.artistLabelsByArtist.get(artistId) ?? [];
+    await remove('artist_labels', cur.filter((x) => !want.some((l) => l.id === x.label_id)).map((x) => x.id));
+    await upsert('artist_labels', want.filter((l) => !cur.some((x) => x.label_id === l.id)).map((l) => ({ id: uid(), artist_id: artistId, label_id: l.id })));
+  }, [ensureLabel, remove, upsert]);
+
+  const deleteLabel = useCallback(async (id: string) => {
+    const d = dataRef.current;
+    await remove('release_labels', d.release_labels.filter((x) => x.label_id === id).map((x) => x.id));
+    await remove('artist_labels', d.artist_labels.filter((x) => x.label_id === id).map((x) => x.id));
+    await remove('list_items', d.list_items.filter((i) => i.entity_id === id).map((i) => i.id));
+    if (ixRef.current.ann.has(annId('label', id))) await remove('annotations', [annId('label', id)]);
+    await remove('labels', [id]);
+  }, [remove]);
+
+  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 
@@ -171,6 +236,22 @@ export function useStore() {
 }
 
 /** Artists credited on a release, by role, in order. */
+export function releaseLabels(ix: Index, releaseId: string): Label[] {
+  return (ix.releaseLabelsByRelease.get(releaseId) ?? []).map((x) => ix.labels.get(x.label_id)).filter(Boolean) as Label[];
+}
+/** An artist's labels: ones you've set on the artist, then ones from their releases (most releases first). */
+export function artistLabels(ix: Index, artistId: string): { label: Label; manual: boolean; n: number }[] {
+  const out = new Map<string, { label: Label; manual: boolean; n: number }>();
+  for (const x of ix.artistLabelsByArtist.get(artistId) ?? []) { const l = ix.labels.get(x.label_id); if (l) out.set(l.id, { label: l, manual: true, n: 0 }); }
+  for (const c of ix.creditsByArtist.get(artistId) ?? []) {
+    if (c.role !== 'primary' || !c.release_id) continue;
+    for (const x of ix.releaseLabelsByRelease.get(c.release_id) ?? []) {
+      const l = ix.labels.get(x.label_id); if (!l) continue;
+      const e = out.get(l.id) ?? { label: l, manual: false, n: 0 }; e.n++; out.set(l.id, e);
+    }
+  }
+  return [...out.values()].sort((a, b) => Number(b.manual) - Number(a.manual) || b.n - a.n);
+}
 export function releaseArtists(ix: Index, releaseId: string, role: Credit['role'] = 'primary'): Artist[] {
   return (ix.creditsByRelease.get(releaseId) ?? [])
     .filter((c) => c.role === role).sort((a, b) => a.position - b.position)

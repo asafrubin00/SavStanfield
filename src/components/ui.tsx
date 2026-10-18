@@ -79,7 +79,7 @@ export function AnnotationPanel({ type, id }: { type: EntityType; id: string }) 
 }
 
 /** Pinned links are solid; links we haven't pinned yet fall back to a search on that site (dashed). */
-export function LinkBar({ links, kind, name, artist, onEdit, extra }: { links: Links; kind: 'artist' | 'release' | 'track'; name: string; artist?: string; onEdit?: () => void; extra?: ReactNode }) {
+export function LinkBar({ links, kind, name, artist, onEdit, extra }: { links: Links; kind: 'artist' | 'release' | 'track' | 'label'; name: string; artist?: string; onEdit?: () => void; extra?: ReactNode }) {
   const fallback = searchLinks(kind, name, artist);
   const shown = LINK_META.filter((m) => links[m.key] || fallback[m.key]);
   return (

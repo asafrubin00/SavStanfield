@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AddToList, AnnotationPanel, Cover, fmtMs, LinkBar, LinksEditor, Modal, QuickRate } from '../components/ui';
 import { mergeLinks } from '../lib/links';
-import { artistMatch, geniusSearch, geniusSong, titleScore, youtubeEmbed } from '../lib/sources';
+import { artistMatch, geniusSearch, geniusSong, soundcloudEmbed, titleScore, youtubeEmbed } from '../lib/sources';
 import { releaseArtists, trackArtists, useStore } from '../lib/store';
 import type { Track } from '../lib/types';
 import { now } from '../lib/util';
@@ -21,7 +21,7 @@ export default function TrackPage() {
   const artistName = t.artist_credit ?? (r ? releaseArtists(ix, r.id)[0]?.name ?? r.artist_credit : '') ?? '';
   const prods = trackArtists(ix, t.id, 'producer'); const feats = trackArtists(ix, t.id, 'featured');
   const save = (p: Partial<Track>) => upsert('tracks', [{ ...t, ...p, updated_at: now() }]);
-  const ye = youtubeEmbed(t.links.youtube);
+  const ye = youtubeEmbed(t.links.youtube); const se = soundcloudEmbed(t.links.soundcloud);
 
   async function genius() {
     setBusy(true);
@@ -51,6 +51,7 @@ export default function TrackPage() {
       <div className="row"><button className="btn primary" disabled={busy} onClick={genius}>Get credits from Genius</button><AddToList type="track" id={t.id} /><button className="btn" onClick={() => setEditing(true)}>Edit</button></div>
       <div className="two" style={{ marginTop: 28 }}>
         <div>
+          {se && <iframe className="embed" title="SoundCloud player" src={se} height={166} style={{ marginBottom: 20 }} allow="autoplay" />}
           {ye && <iframe className="embed" title="YouTube player" src={ye} style={{ aspectRatio: '16/9', marginBottom: 20 }} allow="encrypted-media; picture-in-picture" allowFullScreen />}
           {feats.length > 0 && <><h2 className="h-sec">Featuring</h2><div className="row">{feats.map((a) => <Link key={a.id} className="link" to={`/artist/${a.id}`}>{a.name}</Link>)}</div></>}
           <h2 className="h-sec">Produced by</h2>

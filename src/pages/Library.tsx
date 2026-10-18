@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
+import { MultiSelect, RatingSelect, ratingMatches } from '../components/controls';
 import { Cover, Credits, QuickRate, ReleaseTile } from '../components/ui';
 import { norm, useStore } from '../lib/store';
 import { RELEASE_TYPES } from '../lib/types';
@@ -31,12 +32,14 @@ export default function Library() {
   }, [data.credits, ix]);
   const producers = useMemo(() => data.artists.filter((a) => a.is_producer).sort((a, b) => a.name.localeCompare(b.name)), [data.artists]);
   const decades = useMemo(() => [...new Set(data.releases.map((r) => r.year ? Math.floor(r.year / 10) * 10 : null).filter(Boolean) as number[])].sort(), [data.releases]);
+  const labels = useMemo(() => [...data.labels].sort((a, b) => a.name.localeCompare(b.name)), [data.labels]);
+  const typeCounts = useMemo(() => { const c: Record<string, number> = {}; for (const r of data.releases) c[r.type] = (c[r.type] ?? 0) + 1; return c; }, [data.releases]);
   const presentTypes = useMemo(() => { const s = new Set(data.releases.map((r) => r.type)); return [...RELEASE_TYPES.filter((t) => s.has(t)), ...[...s].filter((t) => !RELEASE_TYPES.includes(t))]; }, [data.releases]);
 
   const rows = useMemo(() => {
     const q = norm(get('q'));
     const yFrom = Number(get('from')) || 0, yTo = Number(get('to')) || 9999;
-    const dec = get('decade'); const rating = get('rating'); const prod = get('producer');
+    const dec = get('decade'); const rating = get('rating'); const prod = get('producer'); const label = get('label');
     const fav = get('fav') === '1', reviewed = get('reviewed') === '1', linked = get('linked');
     const today = new Date().toISOString().slice(0, 10);
     const upcoming = get('when');
@@ -47,9 +50,8 @@ export default function Library() {
       if (y < yFrom || y > yTo) return false;
       if (dec && Math.floor(y / 10) * 10 !== Number(dec)) return false;
       const a = ix.ann.get(`release:${r.id}`);
-      if (rating === 'unrated' && a?.rating) return false;
-      if (rating && rating !== 'unrated' && (a?.rating ?? 0) < Number(rating)) return false;
-      if (rating === '5' && a?.rating !== 5) return false;
+      if (!ratingMatches(rating, a?.rating)) return false;
+      if (label && !ix.releaseLabelsByRelease.get(r.id)?.some((x) => x.label_id === label)) return false;
       if (fav && !a?.favorite) return false;
       if (reviewed && !a?.review && !a?.notes) return false;
       if (prod && !producersByRelease.get(r.id)?.has(prod)) return false;
@@ -83,18 +85,18 @@ export default function Library() {
       <div className="lib">
         <aside className="filters panel" aria-label="Filters">
           <label><span className="label">Title, artist or label</span><input className="input" style={{ width: '100%' }} value={get('q')} onChange={(e) => set('q', e.target.value)} placeholder="Filter…" /></label>
-          <div><span className="label">Type</span><div className="row" style={{ gap: 5 }}>
-            {presentTypes.map((t) => <button key={t} className={`chip${types.includes(t) ? ' on' : ''}`} onClick={() => set('type', (types.includes(t) ? types.filter((x) => x !== t) : [...types, t]).join(',') || null)}>{t}</button>)}
-          </div></div>
+          <div><span className="label">Type</span>
+            <MultiSelect label="Types" options={presentTypes} value={types} counts={typeCounts} onChange={(v) => set('type', v.join(',') || null)} /></div>
           <label><span className="label">Decade</span><select className="select" style={{ width: '100%' }} value={get('decade')} onChange={(e) => set('decade', e.target.value)}>
             <option value="">Any</option>{decades.map((d) => <option key={d} value={d}>{d}s</option>)}</select></label>
           <div><span className="label">Years</span><div className="row" style={{ flexWrap: 'nowrap' }}>
             <input className="input num" style={{ width: '100%' }} inputMode="numeric" placeholder="From" value={get('from')} onChange={(e) => set('from', e.target.value)} />
             <input className="input num" style={{ width: '100%' }} inputMode="numeric" placeholder="To" value={get('to')} onChange={(e) => set('to', e.target.value)} /></div></div>
-          <label><span className="label">Your rating</span><select className="select" style={{ width: '100%' }} value={get('rating')} onChange={(e) => set('rating', e.target.value)}>
-            <option value="">Any</option><option value="5">★★★★★ only</option><option value="4">★★★★ and up</option><option value="3">★★★ and up</option><option value="2">★★ and up</option><option value="1">Rated</option><option value="unrated">Not rated yet</option></select></label>
+          <label className="full-select"><span className="label">Your rating</span><RatingSelect value={get('rating')} onChange={(v) => set('rating', v)} /></label>
           <label><span className="label">Producer</span><select className="select" style={{ width: '100%' }} value={get('producer')} onChange={(e) => set('producer', e.target.value)}>
             <option value="">Any</option>{producers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+          {labels.length > 0 && <label><span className="label">Label</span><select className="select" style={{ width: '100%' }} value={get('label')} onChange={(e) => set('label', e.target.value)}>
+            <option value="">Any</option>{labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>}
           <label><span className="label">Release date</span><select className="select" style={{ width: '100%' }} value={get('when')} onChange={(e) => set('when', e.target.value)}>
             <option value="">Any</option><option value="released">Out now</option><option value="upcoming">Upcoming</option></select></label>
           <label><span className="label">Links</span><select className="select" style={{ width: '100%' }} value={get('linked')} onChange={(e) => set('linked', e.target.value)}>
