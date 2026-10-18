@@ -1,9 +1,9 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { mode, supabase } from '../lib/db';
 import { importWorkbook, type ImportResult } from '../lib/importSheet';
 import { linkQueue, useLinkQueue } from '../lib/queue';
-import { ext } from '../lib/sources';
+import { ext, soundcloudSearchEnabled } from '../lib/sources';
 import { useStore } from '../lib/store';
 import { TABLES, type DataSet, type TableName } from '../lib/types';
 
@@ -56,7 +56,6 @@ export default function Settings() {
       ['Wikipedia', () => ext('wiki', 'w/rest.php/v1/search/page', { q: 'Illmatic', limit: 1 })],
       ['Genius', () => ext('genius', 'search', { q: 'nas illmatic' })],
       ['YouTube', () => ext('youtube', 'search', { part: 'snippet', q: 'illmatic', maxResults: 1, type: 'video' })],
-      ['SoundCloud search', () => ext('soundcloud', 'playlists', { q: 'illmatic', limit: 1 })],
       ['SoundCloud links', () => ext('scoembed', '', { url: 'https://soundcloud.com/nasofficial' })],
     ];
     setChecks(Object.fromEntries(tests.map(([n]) => [n, 'checking…'])));
@@ -66,6 +65,8 @@ export default function Settings() {
   const unlinkedReleases = data.releases.filter((r) => !r.ext.linked_at).map((r) => r.id);
   const unlinkedArtists = data.artists.filter((a) => !a.ext.linked_at).map((a) => a.id);
   const today = new Date().toISOString().slice(0, 10);
+  const [scOn, setScOn] = useState(false);
+  useEffect(() => { void soundcloudSearchEnabled().then(setScOn); }, []);
   const scPass = data.releases.filter((r) => !r.ext.sc_at && !r.artwork_url && !r.ext.reviewed && !(r.date && r.date > today)).map((r) => r.id);
   const secondPass = data.releases.filter((r) => r.ext.linked_at && !r.ext.pass2_at && !r.artwork_url && !(r.date && r.date > today)).map((r) => r.id);
   const hours = (n: number) => { const h = (n * 3.2) / 3600; return h < 1 ? `${Math.ceil(h * 60)} min` : `${h.toFixed(1)} h`; };
@@ -93,7 +94,7 @@ export default function Settings() {
       <p className="muted" style={{ marginBottom: 8 }}>Second pass: looser matching for releases still without a cover — Cover Art Archive, Deezer, a fuzzier MusicBrainz search and Genius album art. Whatever's left after that goes to <Link to="/review">Review matches</Link>.</p>
       <div className="row">
         <button className="btn primary" disabled={!secondPass.length} onClick={() => linkQueue.add('release2', secondPass)}>Second pass on {secondPass.length.toLocaleString()} releases (~{Math.max(1, Math.ceil(secondPass.length * 2.7 / 60))} min)</button>
-        <button className="btn primary" disabled={!scPass.length} onClick={() => linkQueue.add('release3', scPass)} title="Needs the SoundCloud keys — check Connections below">SoundCloud pass on {scPass.length.toLocaleString()} releases (~{Math.max(1, Math.ceil(scPass.length * 0.6 / 60))} min)</button>
+        {scOn && <button className="btn primary" disabled={!scPass.length} onClick={() => linkQueue.add('release3', scPass)}>SoundCloud pass on {scPass.length.toLocaleString()} releases (~{Math.max(1, Math.ceil(scPass.length * 0.6 / 60))} min)</button>}
       </div>
       {(q.pending > 0 || q.done > 0) && <div className="panel" style={{ marginTop: 12 }}>
         <div className="row"><strong className="num">{q.done.toLocaleString()} done, {q.pending.toLocaleString()} to go</strong><span className="muted small">{q.matched} matched · {q.errors} with errors</span><span className="spacer" />

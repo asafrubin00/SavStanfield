@@ -299,6 +299,12 @@ export function soundcloudEmbed(url?: string | null) {
 export interface SCItem { id: number; kind: 'playlist' | 'track'; title: string; artist: string; url: string; artwork?: string; year?: string; tracks?: number }
 interface SCRaw { id: number; title: string; permalink_url: string; artwork_url?: string | null; user?: { username: string; avatar_url?: string }; created_at?: string; release_year?: number; track_count?: number; playlist_type?: string }
 const scArt = (u?: string | null) => u ? u.replace(/-(large|t300x300)\./, '-t500x500.') : undefined;
+/** Whether SoundCloud search is set up on the server (it needs a paid Artist Pro app). Checked once per visit. */
+let scEnabled: Promise<boolean> | null = null;
+export function soundcloudSearchEnabled(): Promise<boolean> {
+  scEnabled ??= ext('soundcloud', 'playlists', { q: 'test', limit: 1 }).then(() => true, (e: Error) => !/not set up/i.test(e.message));
+  return scEnabled;
+}
 /** Search SoundCloud albums/playlists (and tracks for singles). Needs SoundCloud app keys on the server. */
 export async function soundcloudSearch(q: string, kinds: ('playlist' | 'track')[] = ['playlist', 'track']): Promise<SCItem[]> {
   const out: SCItem[] = [];

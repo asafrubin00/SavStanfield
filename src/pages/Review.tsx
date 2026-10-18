@@ -4,7 +4,7 @@ import { Cover } from '../components/ui';
 import { mergeLinks } from '../lib/links';
 import {
   appleSearchAlbums, caaCover, caaThumb, deezerSearchAlbums, fuzzyArtist, fuzzyTitle, geniusSearch, geniusSong,
-  isSoundcloud, mbLinks, mbSearchGroupsLoose, soundcloudOembed, soundcloudSearch, wikidataToWikipedia,
+  isSoundcloud, mbLinks, mbSearchGroupsLoose, soundcloudOembed, soundcloudSearch, soundcloudSearchEnabled, wikidataToWikipedia,
 } from '../lib/sources';
 import { releaseArtists, useStore } from '../lib/store';
 import type { Release } from '../lib/types';
@@ -45,12 +45,14 @@ export default function Review() {
   const [busy, setBusy] = useState(false);
   const [paste, setPaste] = useState('');
   const req = useRef(0);
+  const [scOn, setScOn] = useState(false);
+  useEffect(() => { void soundcloudSearchEnabled().then(setScOn); }, []);
 
   const search = useCallback(async (rel: Release, term: string) => {
     const id = ++req.current;
     const credit = rel.artist_credit ?? '';
     const score = (t: string, a: string) => fuzzyTitle(t, rel.title, a) * 0.6 + fuzzyArtist(credit, a) * 0.4;
-    setCands({ Deezer: 'loading', MusicBrainz: 'loading', Genius: 'loading', 'Apple Music': 'loading', SoundCloud: 'loading' });
+    setCands({ Deezer: 'loading', MusicBrainz: 'loading', Genius: 'loading', 'Apple Music': 'loading', ...(scOn ? { SoundCloud: 'loading' } : {}) });
     const put = (k: string, v: Cand[] | string) => { if (req.current === id) setCands((c) => ({ ...c, [k]: v })); };
     const sorted = (xs: Cand[]) => xs.sort((a, b) => b.score - a.score).slice(0, 6);
 
@@ -78,7 +80,7 @@ export default function Review() {
       },
     }))))).catch((e) => put('Genius', e.message));
 
-    soundcloudSearch(term, ['playlist', 'track']).then((xs) => put('SoundCloud', sorted(xs.map((s) => ({
+    if (scOn) soundcloudSearch(term, ['playlist', 'track']).then((xs) => put('SoundCloud', sorted(xs.map((s) => ({
       key: `sc${s.kind}${s.id}`, source: 'SoundCloud' as const, title: s.title, artist: s.artist, year: s.year, thumb: s.artwork, score: score(s.title, s.artist),
       apply: async (x: Release) => ({ artwork_url: s.artwork ?? x.artwork_url, links: mergeLinks(x.links, { soundcloud: s.url }) }),
     }))))).catch((e) => put('SoundCloud', e.message));
@@ -87,7 +89,7 @@ export default function Review() {
       key: `ap${a.id}`, source: 'Apple Music' as const, title: a.title, artist: a.artist, year: a.date?.slice(0, 4), thumb: a.artwork?.replace('1200x1200bb', '200x200bb'), score: score(a.title, a.artist),
       apply: async (x: Release) => ({ artwork_url: a.artwork ?? x.artwork_url, links: mergeLinks(x.links, { apple: a.url }), ext: { ...x.ext, apple_id: a.id }, date: x.date ?? a.date ?? null }),
     }))))).catch((e) => put('Apple Music', e.message));
-  }, [artistName]);
+  }, [artistName, scOn]);
 
   useEffect(() => {
     if (!r) return;
@@ -170,11 +172,12 @@ export default function Review() {
           <form className="row" style={{ marginBottom: 18 }} onSubmit={(e) => { e.preventDefault(); void search(r, q); }}>
             <input className="input" style={{ flex: 1, minWidth: 200 }} value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search terms" />
             <button className="btn">Search again</button>
+            <a className="btn" href={`https://soundcloud.com/search/albums?q=${encodeURIComponent(q)}`} target="_blank" rel="noreferrer" title="Find it on SoundCloud, copy the link, paste it into the box on the right">Open on SoundCloud</a>
             <input className="input" style={{ flex: 1, minWidth: 200 }} placeholder="…or paste an image URL or SoundCloud link" value={paste} onChange={(e) => setPaste(e.target.value)} />
             <button type="button" className="btn" disabled={!/^https?:\/\//.test(paste)} onClick={applyPasted}>Use this</button>
           </form>
 
-          {(['Deezer', 'Apple Music', 'SoundCloud', 'MusicBrainz', 'Genius'] as const).map((src) => {
+          {(['Deezer', 'Apple Music', ...(scOn ? ['SoundCloud' as const] : []), 'MusicBrainz', 'Genius'] as const).map((src) => {
             const v = cands[src];
             return (
               <section key={src} style={{ marginBottom: 18 }}>
