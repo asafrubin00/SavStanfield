@@ -1,10 +1,10 @@
 import { useSyncExternalStore } from 'react';
-import { autoLinkArtist, autoLinkRelease, findReleaseLabels, findTracklist, secondPassRelease, soundcloudPassRelease } from './enrich';
+import { autoLinkArtist, autoLinkRelease, findReleaseLabels, findTracklist, recheckRelease, secondPassRelease, soundcloudPassRelease } from './enrich';
 import type { Artist, Release, Track } from './types';
 import { norm, now, uid } from './util';
 
 /** Background linking queue: works through artists/releases, pacing itself per API. */
-type Job = { kind: 'artist' | 'release' | 'release2' | 'release3' | 'labels' | 'tracks'; id: string };
+type Job = { kind: 'artist' | 'release' | 'release2' | 'release3' | 'labels' | 'tracks' | 'recheck'; id: string };
 interface Deps {
   getArtist(id: string): Artist | undefined;
   getRelease(id: string): Release | undefined;
@@ -14,6 +14,8 @@ interface Deps {
   setReleaseLabels(id: string, names: string[]): Promise<void>;
   existingTracks(releaseId: string): Promise<Track[]>;
   saveTracks(rows: Track[]): Promise<void>;
+  replaceTracklist(r: Release): Promise<unknown>;
+  refreshLabels(r: Release): Promise<string[]>;
 }
 
 let deps: Deps | null = null;
@@ -47,7 +49,20 @@ async function run() {
         const job = jobs.shift()!;
         queued.delete(`${job.kind}:${job.id}`);
         try {
-          if (job.kind === 'tracks') {
+          if (job.kind === 'recheck') {
+            const r = deps!.getRelease(job.id); if (!r) continue;
+            const res = await recheckRelease(r, deps!.releaseArtistName(r));
+            const next = { ...deps!.getRelease(job.id)!, ...res.patch } as Release;
+            await deps!.saveRelease(next);
+            if (res.changed.length) {
+              state.matched++;
+              const had = !!r.ext.tracks_at || (await deps!.existingTracks(r.id)).length > 0;
+              if (had) await deps!.replaceTracklist(next);
+              if (r.ext.labels_at) await deps!.refreshLabels(next);
+            }
+            if (res.errors.length) state.errors++;
+            state.last = `${r.artist_credit ?? ''} – ${r.title}${res.changed.length ? `: fixed ${res.changed.join(', ')}` : ': fine'}`;
+          } else if (job.kind === 'tracks') {
             const r = deps!.getRelease(job.id); if (!r) continue;
             const res = await findTracklist(r);
             if (res.tracks.length) {

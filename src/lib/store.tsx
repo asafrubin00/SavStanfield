@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { adapter, emptyData } from './db';
+import { findReleaseLabels, findTracklist } from './enrich';
 import { annId, labelKey, norm, now, uid } from './util';
 import type { Annotation, Artist, Credit, CriticScore, DataSet, EntityType, Label, ListItem, Release, TableName, Tables, Track } from './types';
 
@@ -77,6 +78,10 @@ interface Store {
   saveTracksQuiet(rows: Track[]): Promise<void>;
   searchTracks(q: string, limit?: number): Promise<Track[]>;
   createList(name: string, kind: 'list' | 'playlist'): Promise<string>;
+  /** Swap a release's tracklist for the one from its current sources. Songs you've rated, credited or put on a list are kept. */
+  replaceTracklist(release: Release): Promise<{ added: number; kept: number; source: string | null }>;
+  /** Re-read labels from the release's current sources and replace the ones found automatically. */
+  refreshLabels(release: Release): Promise<string[]>;
   addTracksToList(listId: string, trackIds: string[]): Promise<number>;
 }
 
@@ -264,6 +269,43 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await remove('labels', [id]);
   }, [remove]);
 
+  const replaceTracklist = useCallback(async (release: Release) => {
+    const res = await findTracklist(release);
+    if (!res.tracks.length) return { added: 0, kept: 0, source: null };
+    const existing = await adapter.tracksForReleases([release.id]);
+    const d = dataRef.current;
+    const used = new Set<string>([
+      ...d.annotations.filter((a) => a.entity_type === 'track').map((a) => a.entity_id),
+      ...d.list_items.filter((i) => i.entity_type === 'track' && i.entity_id).map((i) => i.entity_id!),
+      ...d.credits.filter((c) => c.track_id).map((c) => c.track_id!),
+    ]);
+    const keep = existing.filter((t) => used.has(t.id));
+    const keepByTitle = new Map(keep.map((t) => [norm(t.title), t]));
+    const albumArtist = norm(release.artist_credit ?? '');
+    const fresh: Track[] = []; const updated: Track[] = [];
+    for (const t of res.tracks) {
+      const k = keepByTitle.get(norm(t.title));
+      const base = { disc: t.disc, number: t.number, duration_ms: t.ms, artist_credit: t.artist && norm(t.artist) !== albumArtist ? t.artist : null, updated_at: now() };
+      if (k) { updated.push({ ...k, ...base, links: { ...k.links, ...t.links }, ext: { ...k.ext, ...t.ext, stale: undefined } }); keepByTitle.delete(norm(t.title)); }
+      else fresh.push({ id: uid(), release_id: release.id, title: t.title, ...base, links: t.links, ext: t.ext, created_at: now() });
+    }
+    // Songs you'd rated that aren't on the right tracklist stay, marked so you can tidy them
+    for (const k of keepByTitle.values()) updated.push({ ...k, ext: { ...k.ext, stale: true }, updated_at: now() });
+    const drop = existing.filter((t) => !used.has(t.id)).map((t) => t.id);
+    if (drop.length) { await adapter.remove('tracks', drop); setData((x) => ({ ...x, tracks: x.tracks.filter((t) => !drop.includes(t.id)) })); }
+    await adapter.upsert('tracks', [...updated, ...fresh]);
+    if (loadedReleases.current.has(release.id)) mergeLocal('tracks', [...updated, ...fresh]);
+    const cur = ixRef.current.releases.get(release.id) ?? release;
+    await upsert('releases', [{ ...cur, ext: { ...cur.ext, tracks_at: now(), track_count: res.tracks.length, tracks_src: res.source ?? undefined }, updated_at: now() }]);
+    return { added: fresh.length, kept: keep.length, source: res.source };
+  }, [mergeLocal, upsert]);
+
+  const refreshLabels = useCallback(async (release: Release) => {
+    const res = await findReleaseLabels(release);
+    if (res.names.length) await setReleaseLabels(release.id, res.names);
+    return res.names;
+  }, [setReleaseLabels]);
+
   const createList = useCallback(async (name: string, kind: 'list' | 'playlist') => {
     const id = uid();
     await upsert('lists', [{ id, name: name.trim(), ranked: kind === 'list', kind, created_at: now(), updated_at: now() }]);
@@ -281,7 +323,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return add.length;
   }, [upsert, say]);
 
-  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList };
+  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList, replaceTracklist, refreshLabels };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

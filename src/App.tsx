@@ -94,7 +94,7 @@ function QueueStatus() {
 }
 
 function Shell() {
-  const { data, ix, loading, error, toast, upsert, setReleaseLabels, saveTracksQuiet } = useStore();
+  const { data, ix, loading, error, toast, upsert, setReleaseLabels, saveTracksQuiet, replaceTracklist, refreshLabels } = useStore();
   const [menu, setMenu] = useState(false);
   const loc = useLocation();
   useEffect(() => { setMenu(false); window.scrollTo(0, 0); }, [loc.pathname]);
@@ -103,9 +103,9 @@ function Shell() {
       getArtist: (id) => ix.artists.get(id), getRelease: (id) => ix.releases.get(id),
       releaseArtistName: (r) => releaseArtists(ix, r.id)[0]?.name ?? r.artist_credit ?? '',
       saveArtist: (a) => upsert('artists', [a]), saveRelease: (r) => upsert('releases', [r]), setReleaseLabels,
-      existingTracks: (id) => adapter.tracksForReleases([id]), saveTracks: saveTracksQuiet,
+      existingTracks: (id) => adapter.tracksForReleases([id]), saveTracks: saveTracksQuiet, replaceTracklist, refreshLabels,
     });
-  }, [ix, upsert, setReleaseLabels, saveTracksQuiet]);
+  }, [ix, upsert, setReleaseLabels, saveTracksQuiet, replaceTracklist, refreshLabels]);
   const playerOpen = usePlayer().ids.length > 0;
   const producers = useMemo(() => data.artists.filter((a) => a.is_producer).length, [data.artists]);
   const toReview = useMemo(() => { const t = new Date().toISOString().slice(0, 10); return data.releases.filter((r) => needsReview(r, t)).length; }, [data.releases]);

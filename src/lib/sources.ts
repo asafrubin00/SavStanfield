@@ -42,14 +42,36 @@ export const call = async <T,>(src: string, path: string, params?: Record<string
 
 // ——— Matching helpers ———
 const stripSuffix = (t: string) => t.replace(/\s*-\s*(single|ep)$/i, '').replace(/\s*[([](deluxe|explicit|clean|remaster(ed)?|expanded)[^)\]]*[)\]]/gi, '').trim();
-export function titleScore(a: string, b: string) {
-  const x = norm(stripSuffix(a)), y = norm(stripSuffix(b));
+// Edition tags that don't change which album it is…
+const EDITION = /\b(deluxe|expanded|remaster(ed)?|anniversary|special|bonus|explicit|collector'?s?|platinum|reissue|edition|super|complete|uncut|bonus tracks?)\b/i;
+// …and versions that are a different thing from the album itself
+const VARIANT = /\b(instrumentals?|acapellas?|a cappella|clean|edited|radio|live|remix(es)?|remixed|mixed|screwed|chopped|slowed|reverb|sped up|karaoke|demos?|tribute|covers?|commentary|interview|lo-?fi|piano|orchestral|unplugged|8-?bit|lullaby|reimagined)\b/i;
+const ROMAN = /\b(ii|iii|iv|vi|vii|viii|ix|xi|xii|xx)\b/g;
+/** Drop " - Single/EP", "(feat. …)" and edition-only brackets/suffixes; keep anything that makes it a different release. */
+export function cleanTitle(t: string) {
+  let s = t.replace(/\s*-\s*(single|ep)$/i, '');
+  s = s.replace(/\s*[([]([^)\]]*)[)\]]/g, (m, inner: string) => ((EDITION.test(inner) && !VARIANT.test(inner)) || /^\s*(feat|ft|with)\b/i.test(inner) ? '' : m));
+  s = s.replace(/\s+[-–—]\s+([^-–—]+)$/, (m, inner: string) => (EDITION.test(inner) && !VARIANT.test(inner) ? '' : m));
+  return s.trim();
+}
+/** True when two titles can't be the same release: a sequel number, a "Vol. 2", or an instrumental/live/clean version. */
+export function incompatible(cand: string, ours: string) {
+  const a = norm(cleanTitle(cand)), b = norm(cleanTitle(ours));
+  if (VARIANT.test(a) !== VARIANT.test(b)) return true;
+  const nums = (s: string) => [...(s.match(/\d+/g) ?? []), ...(s.match(ROMAN) ?? [])].join(',');
+  return nums(a) !== nums(b);
+}
+/** 1 = same title, 0.9 = same apart from a small typo; anything else is below the 0.85 bar. */
+export function titleScore(cand: string, ours: string) {
+  const x = norm(cleanTitle(cand)), y = norm(cleanTitle(ours));
   if (!x || !y) return 0;
-  if (x === y) return 1;
-  if (x.startsWith(y) || y.startsWith(x)) return 0.8;
-  const xs = new Set(x.split(' ')), ys = y.split(' ');
-  const hit = ys.filter((w) => xs.has(w)).length;
-  return (hit / Math.max(xs.size, ys.length)) * 0.7;
+  if (incompatible(cand, ours)) return 0;
+  const cx = x.replace(/\s+/g, '').replace(/^the/, ''), cy = y.replace(/\s+/g, '').replace(/^the/, '');
+  if (cx === cy) return 1;
+  if (cx.startsWith(cy) || cy.startsWith(cx)) return 0.6; // one title is the other plus extra words ("Tha Carter" vs "Tha Carter V")
+  const d = dice(cx, cy);
+  if (d >= 0.88 && Math.abs(cx.length - cy.length) <= 2) return 0.9; // typo-level difference, no extra words
+  return Math.min(d, 0.6);
 }
 export const artistMatch = (a: string, b: string) => { const x = norm(a), y = norm(b); return !!x && !!y && (x === y || x.includes(y) || y.includes(x)); };
 // ——— Fuzzy matching (second pass) ———
@@ -66,11 +88,12 @@ function dice(a: string, b: string) {
 }
 /** 0–1 similarity that shrugs off spacing, hyphens, punctuation, "The" and small typos. */
 export function fuzzy(a: string, b: string) {
-  const x = compact(a), y = compact(b);
+  const x = compact(cleanTitle(a)), y = compact(cleanTitle(b));
   if (!x || !y) return 0;
   if (x === y) return 1;
+  if (incompatible(a, b)) return 0;
   const [s, l] = x.length < y.length ? [x, y] : [y, x];
-  if (l.includes(s) && s.length / l.length >= 0.6) return 0.9;
+  if (l.includes(s) && s.length / l.length >= 0.8) return 0.86;
   return dice(x, y);
 }
 /** Best similarity between a candidate artist and any artist in a credit like "A & B". */
@@ -123,26 +146,43 @@ export function songUrl(u?: string) {
 export const bigArt = (u?: string | null) => u?.replace(/\/\d+x\d+bb\./, '/1200x1200bb.');
 
 // ——— Apple (iTunes Search API: free, no key) ———
-export interface AppleAlbum { id: number; title: string; artist: string; artistId?: number; artwork?: string; date?: string; url: string; tracks?: number; genre?: string; kind: string }
-interface ItunesRow { wrapperType: string; collectionType?: string; collectionId: number; collectionName: string; artistName: string; artistId?: number; artworkUrl100?: string; releaseDate?: string; collectionViewUrl: string; trackCount?: number; primaryGenreName?: string; trackId?: number; trackName?: string; trackNumber?: number; discNumber?: number; trackTimeMillis?: number; trackViewUrl?: string; artistLinkUrl?: string; kind?: string }
+export interface AppleAlbum { id: number; title: string; artist: string; artistId?: number; artwork?: string; date?: string; url: string; tracks?: number; genre?: string; kind: string; explicitness?: string; country?: string }
+interface ItunesRow { wrapperType: string; collectionType?: string; collectionId: number; collectionName: string; artistName: string; artistId?: number; artworkUrl100?: string; releaseDate?: string; collectionViewUrl: string; collectionExplicitness?: string; trackCount?: number; primaryGenreName?: string; trackId?: number; trackName?: string; trackNumber?: number; discNumber?: number; trackTimeMillis?: number; trackViewUrl?: string; artistLinkUrl?: string; kind?: string }
 const toAlbum = (r: ItunesRow): AppleAlbum => {
   const kind = /- single$/i.test(r.collectionName) ? 'Single' : /- ep$/i.test(r.collectionName) ? 'EP' : 'Album';
-  return { id: r.collectionId, title: stripSuffix(r.collectionName), artist: r.artistName, artistId: r.artistId, artwork: bigArt(r.artworkUrl100), date: r.releaseDate?.slice(0, 10), url: r.collectionViewUrl?.split('?')[0], tracks: r.trackCount, genre: r.primaryGenreName, kind };
+  return { id: r.collectionId, title: r.collectionName.replace(/\s*-\s*(single|ep)$/i, ''), explicitness: r.collectionExplicitness, artist: r.artistName, artistId: r.artistId, artwork: bigArt(r.artworkUrl100), date: r.releaseDate?.slice(0, 10), url: r.collectionViewUrl?.split('?')[0], tracks: r.trackCount, genre: r.primaryGenreName, kind };
 };
 /** Apple's search chokes on punctuation (e.g. "DRILLMATIC: Heart vs. Mind"), so search on plain words. */
 export const searchTerm = (s: string) => s.replace(/[^\p{L}\p{N}\s$&']/gu, ' ').replace(/\s+/g, ' ').trim();
 export async function appleSearchAlbums(term: string, limit = 12, country = 'GB'): Promise<AppleAlbum[]> {
   const r = await call<{ results: ItunesRow[] }>('itunes', 'search', { term: searchTerm(term), entity: 'album', media: 'music', limit, country });
-  return r.results.map(toAlbum);
+  return r.results.map((x) => ({ ...toAlbum(x), country }));
 }
 /** Best Apple match for a release: UK store first, then US (some releases are region-locked). */
+/** Best Apple match: exact title (edition tags aside), right artist; explicit over clean, album over single. */
+export function pickApple(list: AppleAlbum[], title: string, artist: string) {
+  return list.map((x) => ({ x, s: titleScore(x.title, title) })).filter(({ x, s }) => s >= 0.85 && artistMatch(x.artist, artist))
+    .sort((a, b) => b.s - a.s || Number(a.x.explicitness === 'cleaned') - Number(b.x.explicitness === 'cleaned') || Number(a.x.kind !== 'Album') - Number(b.x.kind !== 'Album') || (a.x.date ?? '').localeCompare(b.x.date ?? ''))[0]?.x;
+}
 export async function appleFindAlbum(title: string, artist: string): Promise<AppleAlbum | undefined> {
   for (const country of ['GB', 'US']) {
-    const hit = (await appleSearchAlbums(`${artist} ${title}`, 15, country)).find((x) => titleScore(x.title, title) >= 0.8 && artistMatch(x.artist, artist));
+    const hit = pickApple(await appleSearchAlbums(`${artist} ${title}`, 25, country), title, artist);
     if (hit) return hit;
   }
   return undefined;
 }
+/** Look an Apple album up by its ID (UK store, then US). */
+export async function appleAlbumById(id: number): Promise<AppleAlbum | undefined> {
+  for (const country of ['GB', 'US']) {
+    const r = await call<{ results: ItunesRow[] }>('itunes', 'lookup', { id, entity: 'album', country });
+    const row = r.results.find((x) => x.wrapperType === 'collection');
+    if (row) return { ...toAlbum(row), country };
+  }
+  return undefined;
+}
+export const appleIdFromUrl = (u?: string | null) => { const m = u?.match(/\/(\d{5,})(?:[/?#]|$)/); return m ? Number(m[1]) : undefined; };
+export const deezerIdFromUrl = (u?: string | null) => { const m = u?.match(/deezer\.com\/(?:[a-z]{2}\/)?album\/(\d+)/); return m ? Number(m[1]) : undefined; };
+export const mbidFromUrl = (u?: string | null) => u?.match(/musicbrainz\.org\/release-group\/([0-9a-f-]{36})/)?.[1];
 export async function appleSearchSongs(term: string, limit = 12) {
   const r = await call<{ results: ItunesRow[] }>('itunes', 'search', { term, entity: 'song', media: 'music', limit });
   return r.results.map((s) => ({ id: s.trackId!, title: s.trackName!, artist: s.artistName, album: s.collectionName, albumId: s.collectionId, artwork: bigArt(s.artworkUrl100), date: s.releaseDate?.slice(0, 10), url: songUrl(s.trackViewUrl) }));
@@ -234,10 +274,18 @@ export async function deezerArtist(name: string) {
 }
 export async function deezerAlbum(title: string, artist: string) {
   const r = await call<{ data: { id: number; title: string; cover_xl: string; link: string; artist: { name: string } }[] }>('deezer', 'search/album', { q: `artist:"${artist}" album:"${stripSuffix(title)}"`, limit: 5 });
-  return r.data?.find((a) => titleScore(a.title, title) >= 0.8 && artistMatch(a.artist.name, artist)) ?? null;
+  return r.data?.find((a) => titleScore(a.title, title) >= 0.85 && artistMatch(a.artist.name, artist)) ?? null;
 }
 
 export interface DeezerAlbum { id: number; title: string; cover_xl: string; cover_medium: string; link: string; artist: { name: string }; record_type?: string }
+export async function deezerAlbumInfo(id: number): Promise<{ title: string; artist: string; cover?: string; link?: string } | null> {
+  const r = await call<{ title?: string; artist?: { name: string }; cover_xl?: string; link?: string; error?: unknown }>('deezer', `album/${id}`);
+  return r.title ? { title: r.title, artist: r.artist?.name ?? '', cover: r.cover_xl, link: r.link } : null;
+}
+export async function mbGroupInfo(mbid: string): Promise<{ title: string; artist: string } | null> {
+  const r = await call<MBGroupRaw>('mb', `release-group/${mbid}`, { inc: 'artist-credits' });
+  return r?.title ? { title: r.title, artist: (r['artist-credit'] ?? []).map((c) => c.name + (c.joinphrase ?? '')).join('') } : null;
+}
 /** Plain (unquoted) Deezer album search — for fuzzy matching. */
 export async function deezerSearchAlbums(q: string, limit = 10): Promise<DeezerAlbum[]> {
   const r = await call<{ data?: DeezerAlbum[] }>('deezer', 'search/album', { q: searchTerm(q), limit });

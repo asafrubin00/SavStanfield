@@ -31,7 +31,7 @@ export default function TrackPage() {
   async function genius() {
     setBusy(true);
     try {
-      const hit = (await geniusSearch(`${artistName} ${t!.title}`)).find((h) => titleScore(h.title, t!.title) >= 0.8 && artistMatch(h.artist, artistName));
+      const hit = (await geniusSearch(`${artistName} ${t!.title}`)).find((h) => titleScore(h.title, t!.title) >= 0.85 && artistMatch(h.artist, artistName));
       if (!hit) { say('Not found on Genius — paste the link with “Edit links”'); return; }
       const s = await geniusSong(hit.id);
       await save({ links: mergeLinks(t!.links, { genius: s.url, youtube: s.youtube }), ext: { ...t!.ext, genius_id: hit.id } });

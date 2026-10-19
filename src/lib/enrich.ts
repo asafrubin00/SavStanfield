@@ -1,6 +1,6 @@
 import { mergeLinks } from './links';
 import {
-  appleAlbumLabel, appleAlbumTracks, appleFindAlbum, deezerAlbumTracks, mbGroupTracks, type SourceTrack, appleSearchArtists, deezerAlbumLabel, mbGroupLabels, soundcloudSearch, ARTIST_OK, artistMatch, bestMatch, caaCover, deezerAlbum, deezerArtist, deezerSearchAlbums,
+  appleAlbumById, appleAlbumLabel, appleAlbumTracks, appleFindAlbum, appleIdFromUrl, deezerAlbumInfo, deezerIdFromUrl, mbGroupInfo, mbidFromUrl, deezerAlbumTracks, mbGroupTracks, type SourceTrack, appleSearchArtists, deezerAlbumLabel, mbGroupLabels, soundcloudSearch, ARTIST_OK, artistMatch, bestMatch, caaCover, deezerAlbum, deezerArtist, deezerSearchAlbums,
   fuzzy, fuzzyArtist, geniusSearch, geniusSong, mbLinks, mbSearchArtists, mbSearchGroups, mbSearchGroupsLoose, TITLE_OK,
   titleScore, wikiSearch, wikiSummary, wikidataToWikipedia,
 } from './sources';
@@ -30,7 +30,7 @@ export async function autoLinkRelease(rel: Release, artistName: string, opts: { 
     if (!date && a.date) date = a.date;
     found.push('Apple Music');
   }
-  const g = mb?.find((x) => (x.score ?? 0) >= 85 && titleScore(x.title, rel.title) >= 0.8 && artistMatch(x.artist, artistName));
+  const g = mb?.find((x) => (x.score ?? 0) >= 85 && titleScore(x.title, rel.title) >= 0.85 && artistMatch(x.artist, artistName));
   if (g) {
     ext.mbid = g.id; found.push('MusicBrainz');
     const ml = await safe(mbLinks('release-group', g.id), errors, 'MusicBrainz links');
@@ -50,7 +50,7 @@ export async function autoLinkRelease(rel: Release, artistName: string, opts: { 
     const hit = hits?.find((h) => artistMatch(h.artist, artistName));
     if (hit) {
       const s = await safe(geniusSong(hit.id), errors, 'Genius song');
-      if (s?.album && titleScore(s.album.name, rel.title) >= 0.8) { links = mergeLinks(links, { genius: s.album.url }); found.push('Genius'); }
+      if (s?.album && titleScore(s.album.name, rel.title) >= 0.85) { links = mergeLinks(links, { genius: s.album.url }); found.push('Genius'); }
     }
   }
   if (opts.wiki !== false && !links.wikipedia) {
@@ -208,4 +208,88 @@ export async function findTracklist(rel: Release): Promise<{ tracks: SourceTrack
     if (tracks?.length) return { tracks, source, errors };
   }
   return { tracks: [], source: null, errors };
+}
+
+const fromApple = (u?: string | null) => !!u && /mzstatic\.com/.test(u);
+const fromDeezer = (u?: string | null) => !!u && /dzcdn\.net|deezer\.com/.test(u);
+const fromCAA = (u?: string | null) => !!u && /coverartarchive\.org|archive\.org/.test(u);
+
+/**
+ * You set an Apple / Deezer / MusicBrainz link by hand: follow it. Pull that source's ID and cover so the
+ * artwork, tracklist and labels come from the album you chose, not the old match.
+ */
+export async function followLinks(rel: Release, links: Release['links']): Promise<{ patch: Partial<Release>; changed: string[] }> {
+  const ext = { ...rel.ext }; let artwork = rel.artwork_url ?? null; let date = rel.date ?? null;
+  const changed: string[] = []; let newArt: string | undefined;
+  if (links.apple !== rel.links.apple) {
+    changed.push('Apple Music');
+    const id = appleIdFromUrl(links.apple);
+    if (id) { ext.apple_id = id; const a = await appleAlbumById(id).catch(() => undefined); if (a) { newArt ??= a.artwork; if (!date && a.date) date = a.date; } }
+    else delete ext.apple_id;
+  }
+  if (links.deezer !== rel.links.deezer) {
+    changed.push('Deezer');
+    const id = deezerIdFromUrl(links.deezer);
+    if (id) { ext.deezer_id = id; const d = await deezerAlbumInfo(id).catch(() => null); if (d?.cover) newArt ??= d.cover; }
+    else delete ext.deezer_id;
+  }
+  if (links.musicbrainz !== rel.links.musicbrainz) {
+    const id = mbidFromUrl(links.musicbrainz);
+    if (id !== ext.mbid) {
+      changed.push('MusicBrainz');
+      if (id) { ext.mbid = id; const c = await caaCover(id); if (c) newArt ??= c; } else delete ext.mbid;
+    }
+  }
+  if (newArt) artwork = newArt;
+  if (changed.length) ext.recheck_at = now(); // set by hand — the repair job leaves it alone
+  return { patch: { links, ext, artwork_url: artwork, date, year: date ? Number(date.slice(0, 4)) : rel.year, updated_at: now() }, changed };
+}
+
+/**
+ * Repair check for one release: is each automatic match really this album? Wrong matches are re-matched
+ * with the stricter rules or dropped, and their cover goes with them.
+ */
+export async function recheckRelease(rel: Release, artistName: string): Promise<{ patch: Partial<Release>; changed: string[]; errors: string[] }> {
+  const errors: string[] = []; const changed: string[] = [];
+  const links = { ...rel.links }; const ext = { ...rel.ext }; let artwork = rel.artwork_url ?? null;
+  const credit = rel.artist_credit || artistName;
+  const ok = (t: string, a: string) => titleScore(t, rel.title) >= 0.85 && (artistMatch(a, artistName) || fuzzyArtist(credit, a) >= ARTIST_OK);
+
+  if (links.apple && suspectApple(rel)) {
+    const id = (ext.apple_id as number | undefined) ?? appleIdFromUrl(links.apple);
+    const cur = id ? await safe(appleAlbumById(id), errors, 'Apple') : null;
+    if (cur && !ok(cur.title, cur.artist)) {
+      changed.push('Apple Music');
+      const better = await safe(appleFindAlbum(rel.title, artistName), errors, 'Apple');
+      if (better) { links.apple = better.url; ext.apple_id = better.id; if (fromApple(artwork)) artwork = better.artwork ?? null; }
+      else { delete links.apple; delete ext.apple_id; if (fromApple(artwork)) artwork = null; }
+    }
+  }
+  if (ext.deezer_id) {
+    const cur = await safe(deezerAlbumInfo(ext.deezer_id as number), errors, 'Deezer');
+    if (cur && !ok(cur.title, cur.artist)) { changed.push('Deezer'); delete links.deezer; delete ext.deezer_id; if (fromDeezer(artwork)) artwork = null; }
+  }
+  if (ext.mbid && fromCAA(artwork)) {
+    const cur = await safe(mbGroupInfo(ext.mbid as string), errors, 'MusicBrainz');
+    if (cur && !ok(cur.title, cur.artist)) { changed.push('MusicBrainz'); delete links.musicbrainz; delete ext.mbid; artwork = null; }
+  }
+  if (!errors.length) ext.recheck_at = now(); // retried next run if a source was down
+  let patch: Partial<Release> = { links, ext, artwork_url: artwork, updated_at: now() };
+  // Lost the cover? Try the (now stricter) second pass to find the right one
+  if (!artwork && changed.length) {
+    const sp = await secondPassRelease({ ...rel, ...patch } as Release, artistName);
+    patch = { ...patch, ...sp.patch, ext: { ...sp.patch.ext, recheck_at: errors.length ? undefined : now() } };
+  }
+  return { patch, changed, errors };
+}
+
+const slugify = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+/** Apple link whose album name (in the URL) isn't simply this release's title — worth checking. */
+export function suspectApple(r: Release) {
+  const m = r.links.apple?.match(/\/album\/([^/]+)\/\d+/);
+  return !!m && m[1] !== slugify(r.title);
+}
+/** Releases the repair job should look at. */
+export function needsRecheck(r: Release) {
+  return !r.ext.recheck_at && (suspectApple(r) || !!r.ext.deezer_id || (!!r.ext.mbid && fromCAA(r.artwork_url)));
 }

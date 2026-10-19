@@ -1,14 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, fmtMs, LinkBar, LinksEditor, Modal, QuickRate } from '../components/ui';
-import { autoLinkRelease, findReleaseLabels } from '../lib/enrich';
+import { autoLinkRelease, findReleaseLabels, followLinks } from '../lib/enrich';
 import AddToPlaylist from '../components/AddToPlaylist';
 import { player, usePlayer } from '../lib/player';
 import { parseArtistCredit } from '../lib/importSheet';
 import { fantanoSearch, mergeLinks } from '../lib/links';
 import {
   appleAlbumTracks, appleEmbed, appleFindAlbum, appleSearchAlbums, artistMatch, geniusSearch, geniusSong, mbLinks, mbSearchGroups,
-  soundcloudEmbed, soundcloudOembed, titleScore, wikiSearch, wikidataToWikipedia, youtubeEmbed, youtubeSearch, type AppleAlbum, type GeniusHit, type MBGroup,
+  pickApple, soundcloudEmbed, soundcloudOembed, titleScore, wikiSearch, wikidataToWikipedia, youtubeEmbed, youtubeSearch, type AppleAlbum, type GeniusHit, type MBGroup,
 } from '../lib/sources';
 import { norm, releaseArtists, releaseLabels, trackArtists, useStore } from '../lib/store';
 import { RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
@@ -81,7 +81,7 @@ export default function ReleasePage() {
       for (const [i, t] of tracks.entries()) {
         setBusy(`Credits ${i + 1}/${tracks.length}: ${t.title}`);
         const hits = await geniusSearch(`${artistName} ${t.title.replace(/\s*\((feat|ft|with)\.?[^)]*\)/i, '')}`);
-        const hit = hits.find((h) => titleScore(h.title, t.title) >= 0.8 && (artistMatch(h.artist, artistName) || artistMatch(h.artist, t.artist_credit ?? '')));
+        const hit = hits.find((h) => titleScore(h.title, t.title) >= 0.85 && (artistMatch(h.artist, artistName) || artistMatch(h.artist, t.artist_credit ?? '')));
         if (!hit) continue;
         const s = await geniusSong(hit.id);
         await upsert('tracks', [{ ...t, links: mergeLinks(t.links, { genius: s.url, youtube: s.youtube }), ext: { ...t.ext, genius_id: hit.id }, updated_at: now() }]);
@@ -91,7 +91,7 @@ export default function ReleasePage() {
         });
         s.featured.forEach((p, n) => { const { artist } = st.ensureArtist(p.name, { links: { genius: p.url }, ext: { genius_id: p.id } }); st.creditArtist(artist.id, { track_id: t.id }, 'featured', n); });
         if (s.producers.length) found++;
-        if (!r!.links.genius && s.album && titleScore(s.album.name, r!.title) >= 0.8) await save({ links: mergeLinks(r!.links, { genius: s.album.url }) });
+        if (!r!.links.genius && s.album && titleScore(s.album.name, r!.title) >= 0.85) await save({ links: mergeLinks(r!.links, { genius: s.album.url }) });
       }
       say(`Producer credits found for ${found} of ${tracks.length} tracks`);
     } catch (e) { say((e as Error).message); } finally { setBusy(''); }
@@ -109,11 +109,20 @@ export default function ReleasePage() {
   const relLabels = releaseLabels(ix, r.id);
   /** Saving links: a new SoundCloud link also brings its cover if the release has none. */
   async function saveLinks(links: Release['links']) {
-    let artwork_url = r!.artwork_url;
-    if (!artwork_url && links.soundcloud && links.soundcloud !== r!.links.soundcloud) {
-      const o = await soundcloudOembed(links.soundcloud); if (o?.thumb) { artwork_url = o.thumb; say('Cover taken from SoundCloud'); }
-    }
-    await save({ links, artwork_url });
+    setBusy('Saving links…');
+    try {
+      let artwork_url = r!.artwork_url;
+      if (!artwork_url && links.soundcloud && links.soundcloud !== r!.links.soundcloud) {
+        const o = await soundcloudOembed(links.soundcloud); if (o?.thumb) { artwork_url = o.thumb; say('Cover taken from SoundCloud'); }
+      }
+      await followThrough(st, { ...r!, artwork_url }, links, setBusy);
+    } finally { setBusy(''); }
+  }
+  async function replaceTracks() {
+    if (!confirm('Replace this tracklist with the one from the release’s current Apple Music / Deezer / MusicBrainz link? Songs you’ve rated or put on a list are kept.')) return;
+    setBusy('Replacing tracklist…');
+    try { const res = await st.replaceTracklist(r!); say(res.source ? `Tracklist from ${res.source}: ${res.added} new, ${res.kept} kept` : 'No tracklist found for the current links'); }
+    catch (e) { say((e as Error).message); } finally { setBusy(''); }
   }
   async function findLabels() {
     setBusy('Looking up labels…');
@@ -146,7 +155,8 @@ export default function ReleasePage() {
       <div className="row" style={{ marginBottom: 8 }}>
         <button className="btn primary" disabled={!!busy} onClick={quickLink}>Find links &amp; artwork</button>
         <button className="btn" disabled={!!busy} onClick={() => setMatching(true)}>Match by hand</button>
-        <button className="btn" disabled={!!busy} onClick={fetchTracks}>{tracks.length ? 'Update tracklist' : 'Get tracklist'}</button>
+        {tracks.length ? <button className="btn" disabled={!!busy} onClick={replaceTracks} title="Use when the tracklist is from the wrong album">Replace tracklist</button>
+          : <button className="btn" disabled={!!busy} onClick={fetchTracks}>Get tracklist</button>}
         <button className="btn" disabled={!!busy || !tracks.length} onClick={fetchProducers} title="Looks up each song on Genius">Get producer credits</button>
         {!relLabels.length && <button className="btn" disabled={!!busy || !(r.ext.deezer_id || r.ext.mbid || r.ext.apple_id)} onClick={findLabels} title="From Deezer, MusicBrainz or Apple Music">Find labels</button>}
         <AddToList type="release" id={r.id} />
@@ -187,6 +197,7 @@ export default function ReleasePage() {
                   <span style={{ minWidth: 0 }}>
                     <Link to={`/track/${t.id}`} style={{ fontWeight: 500 }}>{t.title}</Link>
                     {t.artist_credit && <span className="muted small"> — {t.artist_credit}</span>}
+                    {t.ext.stale ? <span className="small" style={{ color: 'var(--danger)' }}> · not on this release (kept because you rated or listed it) <button className="btn sm ghost" onClick={async () => { if (confirm(`Remove “${t.title}” and its rating?`)) { await st.remove('credits', (ix.creditsByTrack.get(t.id) ?? []).map((c) => c.id)); await st.remove('tracks', [t.id]); } }}>Remove</button></span> : null}
                     {(prods.length > 0 || feats.length > 0) && <div className="credits">
                       {feats.length > 0 && <>feat. {feats.map((a, j) => <span key={a.id}>{j ? ', ' : ''}<Link to={`/artist/${a.id}`}>{a.name}</Link></span>)}{prods.length ? ' · ' : ''}</>}
                       {prods.length > 0 && <>prod. {prods.map((a, j) => <span key={a.id}>{j ? ', ' : ''}<Link to={`/artist/${a.id}`}>{a.name}</Link></span>)}</>}
@@ -300,8 +311,33 @@ export function ReleaseForm({ release, onClose, defaults }: { release?: Release;
 }
 
 // ——— Choose matches by hand ———
+/**
+ * Save new links and make everything follow them: the chosen source's ID and cover, then (if the source
+ * changed) a fresh tracklist and labels from it.
+ */
+async function followThrough(st: ReturnType<typeof useStore>, rel: Release, links: Release['links'], status?: (s: string) => void) {
+  const { patch, changed } = await followLinks(rel, links);
+  const next = { ...rel, ...patch } as Release;
+  await st.upsert('releases', [next]);
+  if (!changed.length) { st.say('Links saved'); return; }
+  const had = (st.ix.tracksByRelease.get(rel.id)?.length ?? 0) > 0 || !!rel.ext.tracks_at;
+  let msg = `Now following ${changed.join(', ')}`;
+  if (had) {
+    status?.('Replacing tracklist…');
+    const t = await st.replaceTracklist(next).catch(() => null);
+    if (t?.source) msg += ` · tracklist from ${t.source}`;
+  }
+  if (rel.ext.labels_at || (st.ix.releaseLabelsByRelease.get(rel.id)?.length ?? 0) > 0) {
+    status?.('Updating labels…');
+    const names = await st.refreshLabels(next).catch(() => []);
+    if (names.length) msg += ` · labels: ${names.join(', ')}`;
+  }
+  st.say(msg);
+}
+
 function MatchWizard({ release, artistName, onClose }: { release: Release; artistName: string; onClose: () => void }) {
-  const { upsert, say } = useStore();
+  const st = useStore();
+  const { say } = st;
   const [q, setQ] = useState(`${artistName} ${release.title}`);
   const [apple, setApple] = useState<AppleAlbum[] | null>(null);
   const [mb, setMb] = useState<MBGroup[] | null>(null);
@@ -315,7 +351,7 @@ function MatchWizard({ release, artistName, onClose }: { release: Release; artis
     const e: string[] = [];
     const w = <T,>(p: Promise<T>, label: string, set: (v: T) => void) => p.then(set).catch((x) => { e.push(`${label}: ${x.message}`); setErrs([...e]); });
     await Promise.all([
-      w(appleSearchAlbums(q, 15), 'Apple', (v) => { setApple(v); const best = v.find((x) => titleScore(x.title, release.title) >= 0.8 && artistMatch(x.artist, artistName)); if (best) setPick((p) => ({ ...p, apple: p.apple ?? best })); }),
+      w(Promise.all([appleSearchAlbums(q, 15, 'GB'), appleSearchAlbums(q, 15, 'US').catch(() => [])]).then(([gb, us]) => [...gb, ...us.filter((u) => !gb.some((g) => g.id === u.id))]), 'Apple', (v) => { setApple(v); const best = pickApple(v, release.title, artistName); if (best) setPick((p) => ({ ...p, apple: p.apple ?? best })); }),
       w(mbSearchGroups(release.title, artistName), 'MusicBrainz', (v) => setMb(v)),
       w(geniusSearch(q), 'Genius', (v) => setGen(v)),
       w(wikiSearch(`${release.title} ${artistName}`), 'Wikipedia', (v) => setWiki(v)),
@@ -327,18 +363,18 @@ function MatchWizard({ release, artistName, onClose }: { release: Release; artis
     setSaving(true);
     try {
       let links = { ...release.links }; const ext = { ...release.ext }; let artwork = release.artwork_url; let date = release.date;
-      if (pick.apple) { links.apple = pick.apple.url; ext.apple_id = pick.apple.id; artwork = pick.apple.artwork ?? artwork; date = date || pick.apple.date || null; }
+      if (pick.apple) { links.apple = pick.apple.url; artwork = pick.apple.artwork ?? artwork; date = date || pick.apple.date || null; }
       if (pick.mb) {
-        ext.mbid = pick.mb.id;
         const { wikidata, ...rest } = await mbLinks('release-group', pick.mb.id);
         if (!rest.wikipedia && wikidata && !pick.wiki) rest.wikipedia = await wikidataToWikipedia(wikidata);
-        links = mergeLinks(links, rest);
+        // Your pick replaces whatever MusicBrainz match was there
+        links = { ...mergeLinks(links, rest), musicbrainz: rest.musicbrainz, ...(rest.wikipedia ? { wikipedia: rest.wikipedia } : {}), ...(rest.discogs ? { discogs: rest.discogs } : {}) };
         date = date || pick.mb.date || null;
       }
       if (pick.genius) { const s = await geniusSong(pick.genius.id); links.genius = s.album?.url ?? s.url; }
       if (pick.wiki) links.wikipedia = pick.wiki;
-      await upsert('releases', [{ ...release, links, ext, artwork_url: artwork, date, year: date ? Number(date.slice(0, 4)) : release.year, updated_at: now() }]);
-      say('Links saved'); onClose();
+      onClose();
+      await followThrough(st, { ...release, ext, artwork_url: artwork, date, year: date ? Number(date.slice(0, 4)) : release.year }, links);
     } catch (e) { say((e as Error).message); } finally { setSaving(false); }
   }
   const Col = ({ title, children }: { title: string; children: React.ReactNode }) => <div><div className="label" style={{ fontWeight: 600 }}>{title}</div><div style={{ maxHeight: 340, overflowY: 'auto' }}>{children}</div></div>;
@@ -352,7 +388,7 @@ function MatchWizard({ release, artistName, onClose }: { release: Release; artis
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 18 }}>
         <Col title="Apple Music — link and artwork">{!apple ? loading : apple.map((a) => (
           <div key={a.id} className={`cand${pick.apple?.id === a.id ? ' on' : ''}`} onClick={() => setPick({ ...pick, apple: pick.apple?.id === a.id ? undefined : a })}>
-            <Cover src={a.artwork} title={a.title} size={52} /><span><div style={{ fontWeight: 600 }}>{a.title}</div><div className="small muted">{a.artist} · {a.kind} · {a.date?.slice(0, 4)} · {a.tracks} tracks</div></span><span />
+            <Cover src={a.artwork} title={a.title} size={52} /><span><div style={{ fontWeight: 600 }}>{a.title}</div><div className="small muted">{a.artist} · {a.kind} · {a.date?.slice(0, 4)} · {a.tracks} tracks{a.country === 'US' ? ' · US store' : ''}{a.explicitness === 'cleaned' ? ' · clean' : ''}</div></span><span />
           </div>))}{apple && !apple.length && <div className="small muted">No results</div>}</Col>
         <Col title="MusicBrainz — IDs, Wikipedia, Discogs">{!mb ? loading : mb.map((g) => (
           <div key={g.id} className={`cand${pick.mb?.id === g.id ? ' on' : ''}`} style={{ gridTemplateColumns: '1fr auto' }} onClick={() => setPick({ ...pick, mb: pick.mb?.id === g.id ? undefined : g })}>
