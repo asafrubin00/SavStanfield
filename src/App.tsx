@@ -1,3 +1,4 @@
+import { seedAppleArtist } from './lib/sources';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { Cover } from './components/ui';
@@ -98,6 +99,7 @@ function Shell() {
   const [menu, setMenu] = useState(false);
   const loc = useLocation();
   useEffect(() => { setMenu(false); window.scrollTo(0, 0); }, [loc.pathname]);
+  useEffect(() => { for (const a of data.artists) seedAppleArtist(a.name, a.links.apple, a.ext.apple_id as number | undefined); }, [data.artists]);
   useEffect(() => {
     linkQueue.configure({
       getArtist: (id) => ix.artists.get(id), getRelease: (id) => ix.releases.get(id),

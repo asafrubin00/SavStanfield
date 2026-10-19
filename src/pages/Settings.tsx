@@ -4,7 +4,7 @@ import { adapter, mode, supabase } from '../lib/db';
 import { importWorkbook, type ImportResult } from '../lib/importSheet';
 import { needsRecheck, suspectApple } from '../lib/enrich';
 import { linkQueue, useLinkQueue } from '../lib/queue';
-import { ext, soundcloudSearchEnabled } from '../lib/sources';
+import { appleAlbumsByIds, appleIdFromUrl, ext, soundcloudSearchEnabled } from '../lib/sources';
 import { useStore } from '../lib/store';
 import { TABLES, type DataSet, type TableName } from '../lib/types';
 
@@ -79,7 +79,7 @@ export default function Settings() {
   useEffect(() => { void soundcloudSearchEnabled().then(setScOn); }, []);
   const recheckRel = data.releases.filter(needsRecheck);
   const recheck = recheckRel.map((r) => r.id);
-  const recheckSecs = recheckRel.reduce((s, r) => s + (suspectApple(r) ? 3.3 : 0) + (r.ext.deezer_id ? 0.15 : 0) + (r.ext.mbid && /archive\.org/.test(r.artwork_url ?? '') ? 1.1 : 0), 0);
+  const recheckSecs = recheckRel.reduce((s, r) => s + (suspectApple(r) ? 1.5 : 0.05) + (r.ext.deezer_id ? 0.15 : 0) + (r.ext.mbid && /archive\.org/.test(r.artwork_url ?? '') ? 1.1 : 0), 0);
   const needTracks = data.releases.filter((r) => !r.ext.tracks_at && (r.ext.apple_id || r.ext.deezer_id || r.ext.mbid) && !(r.date && r.date > today));
   const trackSecs = needTracks.reduce((s, r) => s + (r.ext.apple_id ? 3.2 : r.ext.deezer_id ? 0.2 : 2.3), 0);
   const scPass = data.releases.filter((r) => !r.ext.sc_at && !r.artwork_url && !r.ext.reviewed && !(r.date && r.date > today)).map((r) => r.id);
@@ -121,7 +121,12 @@ export default function Settings() {
 
       <h2 className="h-sec">Check matches</h2>
       <p className="muted" style={{ marginTop: 0 }}>Rechecks automatic matches with the stricter rules — catches things like “Pluto” matched to “Pluto × Baby Pluto”, sequels, instrumentals, live and clean versions. Wrong matches are re-matched or removed, and their cover, tracklist and labels are replaced. Anything left without a cover goes to Review matches.</p>
-      <button className="btn primary" disabled={!recheck.length} onClick={() => linkQueue.add('recheck', recheck)}>Check {recheck.length.toLocaleString()} releases (~{Math.max(1, Math.ceil(recheckSecs * 1.35 / 60))} min)</button>
+      <button className="btn primary" disabled={!recheck.length} onClick={async () => {
+        // Fetch every linked Apple album in a few batch calls first, so each check doesn't need its own slow lookup
+        const ids = recheckRel.map((r) => (r.ext.apple_id as number | undefined) ?? appleIdFromUrl(r.links.apple)).filter((x): x is number => !!x);
+        try { say('Fetching your Apple Music matches…'); await appleAlbumsByIds(ids); } catch (e) { say(`Apple Music: ${(e as Error).message} — checking one by one instead`); }
+        linkQueue.add('recheck', recheck);
+      }}>Check {recheck.length.toLocaleString()} releases (~{Math.max(1, Math.ceil(recheckSecs * 1.35 / 60))} min)</button>
 
       <h2 className="h-sec">Tracklists</h2>
       <p className="muted" style={{ marginTop: 0 }}>Gets the tracklist for every release that's linked to Apple Music, Deezer or MusicBrainz, so every song can be rated, searched and added to playlists. Apple goes first because its songs can be played here. Albums that already have tracks only get the missing ones.</p>

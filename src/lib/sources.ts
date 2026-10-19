@@ -73,7 +73,10 @@ export function titleScore(cand: string, ours: string) {
   if (d >= 0.88 && Math.abs(cx.length - cy.length) <= 2) return 0.9; // typo-level difference, no extra words
   return Math.min(d, 0.6);
 }
-export const artistMatch = (a: string, b: string) => { const x = norm(a), y = norm(b); return !!x && !!y && (x === y || x.includes(y) || y.includes(x)); };
+/** Each name in a credit ("Future & Lil Uzi Vert" → future, lil uzi vert), plus the whole credit. */
+const creditNames = (s: string) => [s, ...s.split(/\s*(?:&|,|\+|\/|\bx\b|\bwith\b|\bfeat\.?|\bft\.?|\bfeaturing\b)\s*/i)].map((p) => norm(p).replace(/^the /, '')).filter(Boolean);
+/** Same artist, or one of the names in a joint credit. Whole names only — "Future" is not "Future Hunger". */
+export const artistMatch = (a: string, b: string) => { const B = creditNames(b); return creditNames(a).some((x) => B.includes(x)); };
 // ——— Fuzzy matching (second pass) ———
 /** Lower-case, no accents, no punctuation or spaces, no leading "the", no edition suffixes. */
 export const compact = (s: string) => norm(stripSuffix(s)).replace(/^the /, '').replace(/\s+/g, '');
@@ -164,15 +167,68 @@ export function pickApple(list: AppleAlbum[], title: string, artist: string) {
   return list.map((x) => ({ x, s: titleScore(x.title, title) })).filter(({ x, s }) => s >= 0.85 && artistMatch(x.artist, artist))
     .sort((a, b) => b.s - a.s || Number(a.x.explicitness === 'cleaned') - Number(b.x.explicitness === 'cleaned') || Number(a.x.kind !== 'Album') - Number(b.x.kind !== 'Album') || (a.x.date ?? '').localeCompare(b.x.date ?? ''))[0]?.x;
 }
+
+/*
+ * Apple's keyword search ranks by popularity across every field, so "Future Save Me" returns other artists'
+ * songs called "Save Me" and never the EP. Looking through the artist's own catalogue is far more reliable.
+ * Artist IDs are the same in every storefront; both lookups are cached for the session.
+ */
+const appleArtistIds = new Map<string, Promise<number[]>>();
+const appleCatalogues = new Map<string, Promise<AppleAlbum[]>>();
+function cached<T>(m: Map<string, Promise<T>>, k: string, f: () => Promise<T>) {
+  let p = m.get(k);
+  if (!p) { p = f(); m.set(k, p); p.catch(() => m.delete(k)); }
+  return p;
+}
+/** Tell the matcher an artist's Apple ID we already know (from their artist page link). */
+export function seedAppleArtist(name: string, url?: string | null, knownId?: number) {
+  const id = knownId ?? url?.match(/\/artist\/(?:[^/]+\/)?(\d+)/)?.[1];
+  if (id && name && !appleArtistIds.has(norm(name))) appleArtistIds.set(norm(name), Promise.resolve([Number(id)]));
+}
+const appleArtistIdsFor = (artist: string) => cached(appleArtistIds, norm(artist), async () => {
+  const r = await call<{ results: ItunesRow[] }>('itunes', 'search', { term: searchTerm(artist), entity: 'musicArtist', media: 'music', limit: 10, country: 'GB' });
+  return r.results.filter((a) => norm(a.artistName) === norm(artist)).slice(0, 2).map((a) => a.artistId!);
+});
+const appleCatalogue = (id: number, country: string) => cached(appleCatalogues, `${id}:${country}`, async () => {
+  const r = await call<{ results: ItunesRow[] }>('itunes', 'lookup', { id, entity: 'album', limit: 200, country });
+  return r.results.filter((x) => x.wrapperType === 'collection').map((x) => ({ ...toAlbum(x), country }));
+});
+/** Everything Apple lists under this artist in one storefront (up to 200 releases per artist ID). */
+export async function appleAlbumsForArtist(artist: string, country = 'GB'): Promise<AppleAlbum[]> {
+  const ids = artist.trim() ? await appleArtistIdsFor(artist) : [];
+  return (await Promise.all(ids.map((id) => appleCatalogue(id, country)))).flat();
+}
+/** Albums in the artist's catalogue that look like this title, best first — for the pickers. */
+export async function appleCatalogueMatches(title: string, artist: string, country = 'GB'): Promise<AppleAlbum[]> {
+  const n = norm(cleanTitle(title));
+  return (await appleAlbumsForArtist(artist, country))
+    .map((a) => ({ a, s: Math.max(titleScore(a.title, title), n && norm(a.title).includes(n) ? 0.7 : 0) }))
+    .filter((x) => x.s >= 0.5).sort((x, y) => y.s - x.s).map((x) => x.a);
+}
 export async function appleFindAlbum(title: string, artist: string): Promise<AppleAlbum | undefined> {
   for (const country of ['GB', 'US']) {
-    const hit = pickApple(await appleSearchAlbums(`${artist} ${title}`, 25, country), title, artist);
+    const own = await appleAlbumsForArtist(artist, country).catch(() => [] as AppleAlbum[]);
+    const hit = pickApple(own, title, artist) ?? pickApple(await appleSearchAlbums(`${artist} ${title}`, 25, country), title, artist);
     if (hit) return hit;
   }
   return undefined;
 }
 /** Look an Apple album up by its ID (UK store, then US). */
+const appleById = new Map<number, AppleAlbum>();
+/** Look up many Apple albums in a few calls (Apple allows lots of IDs per lookup); later appleAlbumById calls use the results. */
+export async function appleAlbumsByIds(ids: number[], onProgress?: (done: number) => void) {
+  let todo = [...new Set(ids)].filter((id) => !appleById.has(id)); let done = 0;
+  for (const country of ['GB', 'US']) {
+    for (let i = 0; i < todo.length; i += 150) {
+      const r = await call<{ results: ItunesRow[] }>('itunes', 'lookup', { id: todo.slice(i, i + 150).join(','), entity: 'album', country });
+      for (const x of r.results) if (x.wrapperType === 'collection' && !appleById.has(x.collectionId)) { appleById.set(x.collectionId, { ...toAlbum(x), country }); done++; }
+      onProgress?.(done);
+    }
+    todo = todo.filter((id) => !appleById.has(id));
+  }
+}
 export async function appleAlbumById(id: number): Promise<AppleAlbum | undefined> {
+  const hit = appleById.get(id); if (hit) return hit;
   for (const country of ['GB', 'US']) {
     const r = await call<{ results: ItunesRow[] }>('itunes', 'lookup', { id, entity: 'album', country });
     const row = r.results.find((x) => x.wrapperType === 'collection');
@@ -196,10 +252,7 @@ export async function appleAlbumTracks(collectionId: number) {
   if (r.results.length < 2) r = await call<{ results: ItunesRow[] }>('itunes', 'lookup', { id: collectionId, entity: 'song', limit: 200, country: 'US' });
   return r.results.filter((x) => x.wrapperType === 'track').map((t) => ({ id: t.trackId!, title: t.trackName!, artist: t.artistName, number: t.trackNumber ?? null, disc: t.discNumber ?? null, ms: t.trackTimeMillis ?? null, url: songUrl(t.trackViewUrl) }));
 }
-export async function appleArtistAlbums(artistId: number): Promise<AppleAlbum[]> {
-  const r = await call<{ results: ItunesRow[] }>('itunes', 'lookup', { id: artistId, entity: 'album', limit: 200 });
-  return r.results.filter((x) => x.wrapperType === 'collection').map(toAlbum);
-}
+export const appleArtistAlbums = (artistId: number) => appleCatalogue(artistId, 'GB');
 
 // ——— MusicBrainz (free; 1 request a second) ———
 export interface MBGroup { id: string; title: string; type: string; secondary: string[]; date?: string; artist: string; score?: number }

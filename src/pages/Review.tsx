@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { Cover } from '../components/ui';
 import { mergeLinks } from '../lib/links';
 import {
-  appleSearchAlbums, caaCover, caaThumb, deezerSearchAlbums, fuzzyArtist, fuzzyTitle, geniusSearch, geniusSong,
+  appleCatalogueMatches, appleSearchAlbums, caaCover, caaThumb, deezerSearchAlbums, fuzzyArtist, fuzzyTitle, geniusSearch, geniusSong,
   isSoundcloud, mbLinks, mbSearchGroupsLoose, soundcloudOembed, soundcloudSearch, soundcloudSearchEnabled, wikidataToWikipedia,
 } from '../lib/sources';
 import { releaseArtists, useStore } from '../lib/store';
@@ -85,7 +85,7 @@ export default function Review() {
       apply: async (x: Release) => ({ artwork_url: s.artwork ?? x.artwork_url, links: mergeLinks(x.links, { soundcloud: s.url }) }),
     }))))).catch((e) => put('SoundCloud', e.message));
 
-    appleSearchAlbums(term, 8).then((xs) => put('Apple Music', sorted(xs.map((a) => ({
+    Promise.all([appleCatalogueMatches(rel.title, artistName).catch(() => []), appleSearchAlbums(term, 8)]).then(([own, kw]) => [...own.slice(0, 6), ...kw.filter((k) => !own.some((o) => o.id === k.id))]).then((xs) => put('Apple Music', sorted(xs.map((a) => ({
       key: `ap${a.id}`, source: 'Apple Music' as const, title: a.title, artist: a.artist, year: a.date?.slice(0, 4), thumb: a.artwork?.replace('1200x1200bb', '200x200bb'), score: score(a.title, a.artist),
       apply: async (x: Release) => ({ artwork_url: a.artwork ?? x.artwork_url, links: mergeLinks(x.links, { apple: a.url }), ext: { ...x.ext, apple_id: a.id }, date: x.date ?? a.date ?? null }),
     }))))).catch((e) => put('Apple Music', e.message));

@@ -241,7 +241,7 @@ export async function followLinks(rel: Release, links: Release['links']): Promis
     }
   }
   if (newArt) artwork = newArt;
-  if (changed.length) ext.recheck_at = now(); // set by hand — the repair job leaves it alone
+  if (changed.length) ext.links_manual = now(); // set by hand — the repair job leaves it alone
   return { patch: { links, ext, artwork_url: artwork, date, year: date ? Number(date.slice(0, 4)) : rel.year, updated_at: now() }, changed };
 }
 
@@ -255,7 +255,7 @@ export async function recheckRelease(rel: Release, artistName: string): Promise<
   const credit = rel.artist_credit || artistName;
   const ok = (t: string, a: string) => titleScore(t, rel.title) >= 0.85 && (artistMatch(a, artistName) || fuzzyArtist(credit, a) >= ARTIST_OK);
 
-  if (links.apple && suspectApple(rel)) {
+  if (links.apple) {
     const id = (ext.apple_id as number | undefined) ?? appleIdFromUrl(links.apple);
     const cur = id ? await safe(appleAlbumById(id), errors, 'Apple') : null;
     if (cur && !ok(cur.title, cur.artist)) {
@@ -273,12 +273,12 @@ export async function recheckRelease(rel: Release, artistName: string): Promise<
     const cur = await safe(mbGroupInfo(ext.mbid as string), errors, 'MusicBrainz');
     if (cur && !ok(cur.title, cur.artist)) { changed.push('MusicBrainz'); delete links.musicbrainz; delete ext.mbid; artwork = null; }
   }
-  if (!errors.length) ext.recheck_at = now(); // retried next run if a source was down
+  if (!errors.length) { ext.recheck_at = now(); ext.recheck_v = RECHECK_V; } // retried next run if a source was down
   let patch: Partial<Release> = { links, ext, artwork_url: artwork, updated_at: now() };
   // Lost the cover? Try the (now stricter) second pass to find the right one
   if (!artwork && changed.length) {
     const sp = await secondPassRelease({ ...rel, ...patch } as Release, artistName);
-    patch = { ...patch, ...sp.patch, ext: { ...sp.patch.ext, recheck_at: errors.length ? undefined : now() } };
+    patch = { ...patch, ...sp.patch, ext: { ...sp.patch.ext, recheck_at: errors.length ? undefined : now(), recheck_v: errors.length ? undefined : RECHECK_V } };
   }
   return { patch, changed, errors };
 }
@@ -289,7 +289,9 @@ export function suspectApple(r: Release) {
   const m = r.links.apple?.match(/\/album\/([^/]+)\/\d+/);
   return !!m && m[1] !== slugify(r.title);
 }
+/** Bumped when the matching rules change, so the repair job looks again. 2 = whole-name artist check. */
+export const RECHECK_V = 2;
 /** Releases the repair job should look at. */
 export function needsRecheck(r: Release) {
-  return !r.ext.recheck_at && (suspectApple(r) || !!r.ext.deezer_id || (!!r.ext.mbid && fromCAA(r.artwork_url)));
+  return !r.ext.links_manual && r.ext.recheck_v !== RECHECK_V && (!!r.links.apple || !!r.ext.deezer_id || (!!r.ext.mbid && fromCAA(r.artwork_url)));
 }

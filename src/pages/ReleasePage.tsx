@@ -7,7 +7,7 @@ import { player, usePlayer } from '../lib/player';
 import { parseArtistCredit } from '../lib/importSheet';
 import { fantanoSearch, mergeLinks } from '../lib/links';
 import {
-  appleAlbumTracks, appleEmbed, appleFindAlbum, appleSearchAlbums, artistMatch, geniusSearch, geniusSong, mbLinks, mbSearchGroups,
+  appleAlbumTracks, appleCatalogueMatches, appleEmbed, appleFindAlbum, appleSearchAlbums, artistMatch, geniusSearch, geniusSong, mbLinks, mbSearchGroups,
   pickApple, soundcloudEmbed, soundcloudOembed, titleScore, wikiSearch, wikidataToWikipedia, youtubeEmbed, youtubeSearch, type AppleAlbum, type GeniusHit, type MBGroup,
 } from '../lib/sources';
 import { norm, releaseArtists, releaseLabels, trackArtists, useStore } from '../lib/store';
@@ -351,7 +351,18 @@ function MatchWizard({ release, artistName, onClose }: { release: Release; artis
     const e: string[] = [];
     const w = <T,>(p: Promise<T>, label: string, set: (v: T) => void) => p.then(set).catch((x) => { e.push(`${label}: ${x.message}`); setErrs([...e]); });
     await Promise.all([
-      w(Promise.all([appleSearchAlbums(q, 15, 'GB'), appleSearchAlbums(q, 15, 'US').catch(() => [])]).then(([gb, us]) => [...gb, ...us.filter((u) => !gb.some((g) => g.id === u.id))]), 'Apple', (v) => { setApple(v); const best = pickApple(v, release.title, artistName); if (best) setPick((p) => ({ ...p, apple: p.apple ?? best })); }),
+      w((async () => {
+        // The artist's own catalogue first (reliable), then Apple's keyword search; UK store, then US. Shown as they arrive.
+        let all: AppleAlbum[] = [];
+        const add = (xs: AppleAlbum[]) => {
+          all = [...all, ...xs.filter((x) => !all.some((y) => y.id === x.id))]; setApple(all);
+          const best = pickApple(all, release.title, artistName); if (best) setPick((p) => ({ ...p, apple: p.apple ?? best }));
+        };
+        add(await appleCatalogueMatches(release.title, artistName, 'GB').catch(() => []));
+        add(await appleSearchAlbums(q, 15, 'GB'));
+        add(await appleCatalogueMatches(release.title, artistName, 'US').catch(() => []));
+        add(await appleSearchAlbums(q, 15, 'US').catch(() => []));
+      })(), 'Apple', () => undefined),
       w(mbSearchGroups(release.title, artistName), 'MusicBrainz', (v) => setMb(v)),
       w(geniusSearch(q), 'Genius', (v) => setGen(v)),
       w(wikiSearch(`${release.title} ${artistName}`), 'Wikipedia', (v) => setWiki(v)),
