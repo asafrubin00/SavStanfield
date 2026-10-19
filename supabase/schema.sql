@@ -94,6 +94,7 @@ create table if not exists lists (
   name text not null,
   description text,
   ranked boolean not null default true,
+  kind text not null default 'list',
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   primary key (owner, id)
@@ -163,3 +164,4 @@ begin
     execute format('create policy owner_all on %I for all using (owner = auth.uid()) with check (owner = auth.uid())', t);
   end loop;
 end $$;
+create index if not exists tracks_release_idx on tracks (owner, release_id);

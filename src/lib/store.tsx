@@ -72,6 +72,12 @@ interface Store {
   setReleaseLabels(releaseId: string, names: string[]): Promise<void>;
   setArtistLabels(artistId: string, names: string[]): Promise<void>;
   deleteLabel(id: string): Promise<void>;
+  loadReleaseTracks(releaseIds: string[]): Promise<void>;
+  loadTracks(ids: string[]): Promise<void>;
+  saveTracksQuiet(rows: Track[]): Promise<void>;
+  searchTracks(q: string, limit?: number): Promise<Track[]>;
+  createList(name: string, kind: 'list' | 'playlist'): Promise<string>;
+  addTracksToList(listId: string, trackIds: string[]): Promise<number>;
 }
 
 const Ctx = createContext<Store | null>(null);
@@ -122,12 +128,45 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const replaceAll = useCallback(async (d: DataSet) => {
     for (const t of Object.keys(d) as TableName[]) {
-      const existing = dataRef.current[t].map((r) => r.id);
-      await adapter.remove(t, existing);
+      await adapter.clear(t);
       await adapter.upsert(t, d[t] as never[]);
     }
+    loadedReleases.current.clear();
     setData(d);
   }, []);
+
+  /** Merge rows into memory without saving (they came from the database). */
+  const mergeLocal = useCallback(<T extends TableName>(table: T, rows: Tables[T][]) => {
+    if (!rows.length) return;
+    setData((d) => {
+      const list = [...(d[table] as { id: string }[])];
+      const pos = new Map(list.map((r, i) => [r.id, i]));
+      for (const r of rows as { id: string }[]) { const i = pos.get(r.id); if (i === undefined) { pos.set(r.id, list.length); list.push(r); } else list[i] = r; }
+      return { ...d, [table]: list };
+    });
+  }, []);
+  const loadedReleases = useRef(new Set<string>());
+  const loadReleaseTracks = useCallback(async (releaseIds: string[]) => {
+    const want = releaseIds.filter((id) => !loadedReleases.current.has(id));
+    if (!want.length) return;
+    want.forEach((id) => loadedReleases.current.add(id));
+    try { mergeLocal('tracks', await adapter.tracksForReleases(want)); }
+    catch (e) { want.forEach((id) => loadedReleases.current.delete(id)); say(`Couldn't load tracks: ${(e as Error).message}`); }
+  }, [mergeLocal, say]);
+  const loadTracks = useCallback(async (ids: string[]) => {
+    const want = ids.filter((id) => !ixRef.current.tracks.has(id));
+    if (want.length) mergeLocal('tracks', await adapter.tracksByIds(want));
+  }, [mergeLocal]);
+  /** Save tracks from a background job; only keep them in memory if their album is open/loaded. */
+  const saveTracksQuiet = useCallback(async (rows: Track[]) => {
+    await adapter.upsert('tracks', rows);
+    mergeLocal('tracks', rows.filter((t) => t.release_id && loadedReleases.current.has(t.release_id)));
+  }, [mergeLocal]);
+  const searchTracks = useCallback(async (q: string, limit?: number) => {
+    const found = await adapter.searchTracks(q, limit);
+    mergeLocal('tracks', found);
+    return found;
+  }, [mergeLocal]);
 
   const annotation = useCallback((t: EntityType, id: string) => ixRef.current.ann.get(annId(t, id)), []);
 
@@ -171,7 +210,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const deleteRelease = useCallback(async (id: string) => {
     const d = dataRef.current;
-    const trackIds = d.tracks.filter((t) => t.release_id === id).map((t) => t.id);
+    const trackIds = [...new Set([...d.tracks.filter((t) => t.release_id === id).map((t) => t.id), ...(await adapter.tracksForReleases([id])).map((t) => t.id)])];
     const tset = new Set(trackIds);
     await remove('credits', d.credits.filter((c) => c.release_id === id || (c.track_id && tset.has(c.track_id))).map((c) => c.id));
     await remove('tracks', trackIds);
@@ -225,7 +264,24 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await remove('labels', [id]);
   }, [remove]);
 
-  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel };
+  const createList = useCallback(async (name: string, kind: 'list' | 'playlist') => {
+    const id = uid();
+    await upsert('lists', [{ id, name: name.trim(), ranked: kind === 'list', kind, created_at: now(), updated_at: now() }]);
+    return id;
+  }, [upsert]);
+  const addTracksToList = useCallback(async (listId: string, trackIds: string[]) => {
+    const items = ixRef.current.itemsByList.get(listId) ?? [];
+    const have = new Set(items.map((i) => i.entity_id));
+    let pos = items.reduce((m, i) => Math.max(m, i.position), 0);
+    const add = [...new Set(trackIds)].filter((t) => !have.has(t)).map((t) => ({ id: uid(), list_id: listId, entity_type: 'track' as const, entity_id: t, position: ++pos }));
+    await upsert('list_items', add);
+    const l = ixRef.current.lists.get(listId);
+    if (l) await upsert('lists', [{ ...l, updated_at: now() }]);
+    say(add.length ? `Added ${add.length === 1 ? '1 song' : `${add.length} songs`} to ${l?.name ?? 'playlist'}` : 'Already on that playlist');
+    return add.length;
+  }, [upsert, say]);
+
+  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

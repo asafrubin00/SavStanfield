@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, fmtMs, LinkBar, LinksEditor, Modal, QuickRate } from '../components/ui';
 import { autoLinkRelease, findReleaseLabels } from '../lib/enrich';
+import AddToPlaylist from '../components/AddToPlaylist';
+import { player, usePlayer } from '../lib/player';
 import { parseArtistCredit } from '../lib/importSheet';
 import { fantanoSearch, mergeLinks } from '../lib/links';
 import {
@@ -24,6 +26,8 @@ export default function ReleasePage() {
   const [busy, setBusy] = useState('');
   const [embed, setEmbed] = useState<'apple' | 'youtube' | 'soundcloud' | null>(null);
   const [yt, setYt] = useState<Awaited<ReturnType<typeof youtubeSearch>> | null>(null);
+  const ps = usePlayer(); const playingId = ps.ids[ps.index];
+  useEffect(() => { if (id) void st.loadReleaseTracks([id]); }, [id, st.loadReleaseTracks]);
 
   const tracks = useMemo(() => [...(ix.tracksByRelease.get(id!) ?? [])].sort((a, b) => (a.disc ?? 1) - (b.disc ?? 1) || (a.number ?? 0) - (b.number ?? 0)), [ix, id]);
   const producers = useMemo(() => {
@@ -169,13 +173,17 @@ export default function ReleasePage() {
             {!yt.length && <div className="muted">No results.</div>}
           </div>}
 
-          <h2 className="h-sec">Tracklist {tracks.length > 0 && <span className="muted">{fmtMs(tracks.reduce((s, t) => s + (t.duration_ms ?? 0), 0))}</span>}</h2>
+          <h2 className="h-sec">Tracklist {tracks.length > 0 && <span className="muted">{fmtMs(tracks.reduce((s, t) => s + (t.duration_ms ?? 0), 0))}</span>}
+            {tracks.length > 0 && <span className="row" style={{ marginLeft: 'auto', gap: 6, fontSize: 14, fontWeight: 400 }}>
+              <button className="btn sm" onClick={() => player.play(tracks.map((x) => x.id), 0, r.title)}>Play album</button>
+              <AddToPlaylist trackIds={tracks.map((x) => x.id)} label="Add album to playlist" />
+            </span>}</h2>
           {!tracks.length ? <div className="empty">No tracks yet. “Get tracklist” pulls it from Apple Music.</div> : (
             <ol className="tracklist">{tracks.map((t, i) => {
               const prods = trackArtists(ix, t.id, 'producer'); const feats = trackArtists(ix, t.id, 'featured');
               return (
-                <li key={t.id}>
-                  <span className="n">{t.number ?? i + 1}</span>
+                <li key={t.id} className={playingId === t.id ? 'playing' : ''}>
+                  <button className="n btn ghost sm" style={{ padding: '2px 4px' }} aria-label={`Play ${t.title}`} title="Play" onClick={() => player.play(tracks.map((x) => x.id), i, r.title)}>{playingId === t.id ? '♪' : t.number ?? i + 1}</button>
                   <span style={{ minWidth: 0 }}>
                     <Link to={`/track/${t.id}`} style={{ fontWeight: 500 }}>{t.title}</Link>
                     {t.artist_credit && <span className="muted small"> — {t.artist_credit}</span>}
@@ -185,7 +193,7 @@ export default function ReleasePage() {
                     </div>}
                   </span>
                   <span className="small muted num">{fmtMs(t.duration_ms)}</span>
-                  <QuickRate type="track" id={t.id} />
+                  <span className="row" style={{ flexWrap: 'nowrap', gap: 2 }}><QuickRate type="track" id={t.id} /><AddToPlaylist trackIds={[t.id]} label="+" small /></span>
                 </li>);
             })}</ol>
           )}

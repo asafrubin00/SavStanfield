@@ -1,10 +1,10 @@
 import { useSyncExternalStore } from 'react';
-import { autoLinkArtist, autoLinkRelease, findReleaseLabels, secondPassRelease, soundcloudPassRelease } from './enrich';
-import { now } from './util';
-import type { Artist, Release } from './types';
+import { autoLinkArtist, autoLinkRelease, findReleaseLabels, findTracklist, secondPassRelease, soundcloudPassRelease } from './enrich';
+import type { Artist, Release, Track } from './types';
+import { norm, now, uid } from './util';
 
 /** Background linking queue: works through artists/releases, pacing itself per API. */
-type Job = { kind: 'artist' | 'release' | 'release2' | 'release3' | 'labels'; id: string };
+type Job = { kind: 'artist' | 'release' | 'release2' | 'release3' | 'labels' | 'tracks'; id: string };
 interface Deps {
   getArtist(id: string): Artist | undefined;
   getRelease(id: string): Release | undefined;
@@ -12,6 +12,8 @@ interface Deps {
   saveArtist(a: Artist): Promise<void>;
   saveRelease(r: Release): Promise<void>;
   setReleaseLabels(id: string, names: string[]): Promise<void>;
+  existingTracks(releaseId: string): Promise<Track[]>;
+  saveTracks(rows: Track[]): Promise<void>;
 }
 
 let deps: Deps | null = null;
@@ -45,7 +47,27 @@ async function run() {
         const job = jobs.shift()!;
         queued.delete(`${job.kind}:${job.id}`);
         try {
-          if (job.kind === 'labels') {
+          if (job.kind === 'tracks') {
+            const r = deps!.getRelease(job.id); if (!r) continue;
+            const res = await findTracklist(r);
+            if (res.tracks.length) {
+              const have = new Set((await deps!.existingTracks(r.id)).map((t) => norm(t.title)));
+              const albumArtist = norm(r.artist_credit ?? '');
+              const rows: Track[] = res.tracks.filter((t) => !have.has(norm(t.title))).map((t) => ({
+                id: uid(), release_id: r.id, disc: t.disc, number: t.number, title: t.title,
+                artist_credit: t.artist && norm(t.artist) !== albumArtist ? t.artist : null, duration_ms: t.ms,
+                links: t.links, ext: t.ext, created_at: now(), updated_at: now(),
+              }));
+              await deps!.saveTracks(rows);
+              state.matched++;
+            }
+            if (res.errors.length) state.errors++;
+            if (res.tracks.length || !res.errors.length) {
+              const cur = deps!.getRelease(job.id)!;
+              await deps!.saveRelease({ ...cur, ext: { ...cur.ext, tracks_at: now(), track_count: res.tracks.length || undefined } });
+            }
+            state.last = `${r.artist_credit ?? ''} – ${r.title}${res.tracks.length ? `: ${res.tracks.length} tracks (${res.source})` : ''}`;
+          } else if (job.kind === 'labels') {
             const r = deps!.getRelease(job.id); if (!r) continue;
             const res = await findReleaseLabels(r);
             if (res.names.length) { await deps!.setReleaseLabels(r.id, res.names); state.matched++; }

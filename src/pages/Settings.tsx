@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { mode, supabase } from '../lib/db';
+import { adapter, mode, supabase } from '../lib/db';
 import { importWorkbook, type ImportResult } from '../lib/importSheet';
 import { linkQueue, useLinkQueue } from '../lib/queue';
 import { ext, soundcloudSearchEnabled } from '../lib/sources';
@@ -22,7 +22,13 @@ export default function Settings() {
   const [theme, setT] = useState(getTheme());
 
   async function onFile(f: File) {
-    try { setPreview(importWorkbook(await f.arrayBuffer(), data)); }
+    try {
+      setImporting('Reading…');
+      // Compare against every saved track (not just the ones loaded in this session) so re-imports don't duplicate
+      const tracks = await adapter.allTracks();
+      setPreview(importWorkbook(await f.arrayBuffer(), { ...data, tracks }));
+      setImporting('');
+    }
     catch (e) { say(`Couldn't read that file: ${(e as Error).message}`); }
   }
   async function commit() {
@@ -34,8 +40,11 @@ export default function Settings() {
     }
     setImporting(''); setPreview(null); say('Spreadsheet imported');
   }
-  function exportJson() {
-    const blob = new Blob([JSON.stringify({ app: 'savstanfield', version: 1, exported: new Date().toISOString(), data }, null, 1)], { type: 'application/json' });
+  async function exportJson() {
+    setImporting('Preparing backup…');
+    const tracks = await adapter.allTracks().catch(() => data.tracks);
+    setImporting('');
+    const blob = new Blob([JSON.stringify({ app: 'savstanfield', version: 1, exported: new Date().toISOString(), data: { ...data, tracks } })], { type: 'application/json' });
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `savstanfield-backup-${new Date().toISOString().slice(0, 10)}.json`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }
@@ -67,6 +76,8 @@ export default function Settings() {
   const today = new Date().toISOString().slice(0, 10);
   const [scOn, setScOn] = useState(false);
   useEffect(() => { void soundcloudSearchEnabled().then(setScOn); }, []);
+  const needTracks = data.releases.filter((r) => !r.ext.tracks_at && (r.ext.apple_id || r.ext.deezer_id || r.ext.mbid) && !(r.date && r.date > today));
+  const trackSecs = needTracks.reduce((s, r) => s + (r.ext.apple_id ? 3.2 : r.ext.deezer_id ? 0.2 : 2.3), 0);
   const scPass = data.releases.filter((r) => !r.ext.sc_at && !r.artwork_url && !r.ext.reviewed && !(r.date && r.date > today)).map((r) => r.id);
   const secondPass = data.releases.filter((r) => r.ext.linked_at && !r.ext.pass2_at && !r.artwork_url && !(r.date && r.date > today)).map((r) => r.id);
   const hours = (n: number) => { const h = (n * 3.2) / 3600; return h < 1 ? `${Math.ceil(h * 60)} min` : `${h.toFixed(1)} h`; };
@@ -103,6 +114,10 @@ export default function Settings() {
         <div className="progress" style={{ marginTop: 8 }}><div style={{ width: `${(q.done / Math.max(1, q.done + q.pending)) * 100}%` }} /></div>
         {q.last && <div className="small muted" style={{ marginTop: 6 }}>Last: {q.last}</div>}
       </div>}
+
+      <h2 className="h-sec">Tracklists</h2>
+      <p className="muted" style={{ marginTop: 0 }}>Gets the tracklist for every release that's linked to Apple Music, Deezer or MusicBrainz, so every song can be rated, searched and added to playlists. Apple goes first because its songs can be played here. Albums that already have tracks only get the missing ones.</p>
+      <button className="btn primary" disabled={!needTracks.length} onClick={() => linkQueue.add('tracks', needTracks.map((r) => r.id))}>Get tracklists for {needTracks.length.toLocaleString()} releases (~{trackSecs > 3600 ? `${(trackSecs / 3600).toFixed(1)} h` : `${Math.max(1, Math.ceil(trackSecs / 60))} min`})</button>
 
       <h2 className="h-sec">Connections</h2>
       <button className="btn" onClick={check}>Check connections</button>

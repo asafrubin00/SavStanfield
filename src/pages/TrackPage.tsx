@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import AddToPlaylist from '../components/AddToPlaylist';
+import { player } from '../lib/player';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AddToList, AnnotationPanel, Cover, fmtMs, LinkBar, LinksEditor, Modal, QuickRate } from '../components/ui';
 import { mergeLinks } from '../lib/links';
@@ -16,6 +18,9 @@ export default function TrackPage() {
   const [editLinks, setEditLinks] = useState(false);
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [missing, setMissing] = useState(false);
+  useEffect(() => { if (id && !ix.tracks.has(id)) { setMissing(false); void st.loadTracks([id]).finally(() => setMissing(true)); } }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!t && !missing) return <div className="muted">Loading…</div>;
   if (!t) return <div className="empty">This song isn't in your library. <Link to="/library">Back to library</Link></div>;
   const r = t.release_id ? ix.releases.get(t.release_id) : undefined;
   const artistName = t.artist_credit ?? (r ? releaseArtists(ix, r.id)[0]?.name ?? r.artist_credit : '') ?? '';
@@ -48,7 +53,7 @@ export default function TrackPage() {
         </div>
       </div>
       <div style={{ margin: '22px 0' }}><LinkBar links={t.links} kind="track" name={t.title} artist={artistName} onEdit={() => setEditLinks(true)} /></div>
-      <div className="row"><button className="btn primary" disabled={busy} onClick={genius}>Get credits from Genius</button><AddToList type="track" id={t.id} /><button className="btn" onClick={() => setEditing(true)}>Edit</button></div>
+      <div className="row"><button className="btn primary" disabled={busy} onClick={genius}>Get credits from Genius</button><button className="btn" onClick={() => player.play([t.id], 0)}>Play</button><AddToPlaylist trackIds={[t.id]} label="Add to playlist" /><AddToList type="track" id={t.id} /><button className="btn" onClick={() => setEditing(true)}>Edit</button></div>
       <div className="two" style={{ marginTop: 28 }}>
         <div>
           {se && <iframe className="embed" title="SoundCloud player" src={se} height={166} style={{ marginBottom: 20 }} allow="autoplay" />}

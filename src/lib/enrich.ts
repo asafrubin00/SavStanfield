@@ -1,6 +1,6 @@
 import { mergeLinks } from './links';
 import {
-  appleAlbumLabel, appleFindAlbum, appleSearchArtists, deezerAlbumLabel, mbGroupLabels, soundcloudSearch, ARTIST_OK, artistMatch, bestMatch, caaCover, deezerAlbum, deezerArtist, deezerSearchAlbums,
+  appleAlbumLabel, appleAlbumTracks, appleFindAlbum, deezerAlbumTracks, mbGroupTracks, type SourceTrack, appleSearchArtists, deezerAlbumLabel, mbGroupLabels, soundcloudSearch, ARTIST_OK, artistMatch, bestMatch, caaCover, deezerAlbum, deezerArtist, deezerSearchAlbums,
   fuzzy, fuzzyArtist, geniusSearch, geniusSong, mbLinks, mbSearchArtists, mbSearchGroups, mbSearchGroupsLoose, TITLE_OK,
   titleScore, wikiSearch, wikiSummary, wikidataToWikipedia,
 } from './sources';
@@ -194,4 +194,18 @@ export async function soundcloudPassRelease(rel: Release, artistName: string): P
     if (!rel.artwork_url && m.item.artwork) { patch.artwork_url = m.item.artwork; found.push('SoundCloud cover'); } else found.push('SoundCloud');
   }
   return { patch, found, errors };
+}
+
+/** Tracklist from Apple (gives playable song links), else Deezer, else MusicBrainz. */
+export async function findTracklist(rel: Release): Promise<{ tracks: SourceTrack[]; source: string | null; errors: string[] }> {
+  const errors: string[] = [];
+  const tries: [string, () => Promise<SourceTrack[]>][] = [];
+  if (rel.ext.apple_id) tries.push(['Apple Music', async () => (await appleAlbumTracks(rel.ext.apple_id as number)).map((t) => ({ title: t.title, artist: t.artist, number: t.number, disc: t.disc, ms: t.ms, links: t.url ? { apple: t.url } : {}, ext: { apple_id: t.id } }))]);
+  if (rel.ext.deezer_id) tries.push(['Deezer', () => deezerAlbumTracks(rel.ext.deezer_id as number)]);
+  if (rel.ext.mbid) tries.push(['MusicBrainz', () => mbGroupTracks(rel.ext.mbid as string)]);
+  for (const [source, fn] of tries) {
+    const tracks = await safe(fn(), errors, source);
+    if (tracks?.length) return { tracks, source, errors };
+  }
+  return { tracks: [], source: null, errors };
 }

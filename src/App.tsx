@@ -1,7 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 import { Cover } from './components/ui';
-import { missingTables, mode, supabase } from './lib/db';
+import Player from './components/Player';
+import { usePlayer } from './lib/player';
+import { adapter, missingColumns, missingTables, mode, supabase } from './lib/db';
 import { linkQueue, useLinkQueue } from './lib/queue';
 import { norm, releaseArtists, StoreProvider, useStore } from './lib/store';
 import ArtistPage from './pages/ArtistPage';
@@ -29,6 +31,12 @@ function GlobalSearch() {
     const k = (e: KeyboardEvent) => { if (e.key === '/' && !(e.target as HTMLElement).closest('input,textarea,select')) { e.preventDefault(); box.current?.querySelector('input')?.focus(); } };
     window.addEventListener('keydown', k); return () => window.removeEventListener('keydown', k);
   }, []);
+  const { searchTracks } = useStore();
+  useEffect(() => {
+    if (q.trim().length < 3) return;
+    const t = window.setTimeout(() => { void searchTracks(q.trim(), 10).catch(() => undefined); }, 250);
+    return () => window.clearTimeout(t);
+  }, [q, searchTracks]);
   const results = useMemo(() => {
     const n = norm(q); if (n.length < 2) return [];
     const hit = (s?: string | null) => !!s && norm(s).includes(n);
@@ -79,14 +87,14 @@ function QueueStatus() {
   const total = s.pending + s.done;
   return (
     <Link to="/settings" className="small muted" style={{ minWidth: 150 }} title="Linking in the background">
-      Linking {s.done.toLocaleString()} / {total.toLocaleString()}{s.paused ? ' (paused)' : ''}
+      Updating {s.done.toLocaleString()} / {total.toLocaleString()}{s.paused ? ' (paused)' : ''}
       <div className="progress" style={{ marginTop: 3 }}><div style={{ width: `${total ? (s.done / total) * 100 : 0}%` }} /></div>
     </Link>
   );
 }
 
 function Shell() {
-  const { data, ix, loading, error, toast, upsert, setReleaseLabels } = useStore();
+  const { data, ix, loading, error, toast, upsert, setReleaseLabels, saveTracksQuiet } = useStore();
   const [menu, setMenu] = useState(false);
   const loc = useLocation();
   useEffect(() => { setMenu(false); window.scrollTo(0, 0); }, [loc.pathname]);
@@ -95,8 +103,10 @@ function Shell() {
       getArtist: (id) => ix.artists.get(id), getRelease: (id) => ix.releases.get(id),
       releaseArtistName: (r) => releaseArtists(ix, r.id)[0]?.name ?? r.artist_credit ?? '',
       saveArtist: (a) => upsert('artists', [a]), saveRelease: (r) => upsert('releases', [r]), setReleaseLabels,
+      existingTracks: (id) => adapter.tracksForReleases([id]), saveTracks: saveTracksQuiet,
     });
-  }, [ix, upsert, setReleaseLabels]);
+  }, [ix, upsert, setReleaseLabels, saveTracksQuiet]);
+  const playerOpen = usePlayer().ids.length > 0;
   const producers = useMemo(() => data.artists.filter((a) => a.is_producer).length, [data.artists]);
   const toReview = useMemo(() => { const t = new Date().toISOString().slice(0, 10); return data.releases.filter((r) => needsReview(r, t)).length; }, [data.releases]);
   const nav: [string, string, number | null][] = [
@@ -125,8 +135,8 @@ function Shell() {
           <span className="spacer" />
           <QueueStatus />
         </header>
-        <main className="page">
-          {missingTables.size > 0 && <div className="panel" style={{ marginBottom: 20, borderColor: 'var(--accent)' }}>One-time setup: labels need a small database update. In Supabase, open the SQL Editor, paste in <code>supabase/002-labels.sql</code> from the repo, click Run, then reload this page.</div>}
+        <main className="page" style={playerOpen ? { paddingBottom: 260 } : undefined}>
+          {(missingTables.size > 0 || missingColumns.size > 0) && <div className="panel" style={{ marginBottom: 20, borderColor: 'var(--accent)' }}>One-time setup: the database needs a small update. In Supabase, open the SQL Editor, paste in {missingTables.size > 0 && <code>supabase/002-labels.sql</code>}{missingTables.size > 0 && missingColumns.size > 0 && ' and then '}{missingColumns.size > 0 && <code>supabase/003-playlists.sql</code>} from the repo, click Run, then reload this page.</div>}
           {loading ? <div className="muted">Loading your library…</div> : error ? <div className="empty">Couldn't load your library: {error}</div> : (
             <Routes>
               <Route path="/" element={<Home />} />
@@ -150,7 +160,8 @@ function Shell() {
           )}
         </main>
       </div>
-      {toast && <div className="toast" role="status">{toast}</div>}
+      <Player />
+      {toast && <div className="toast" role="status" style={playerOpen ? { bottom: 250 } : undefined}>{toast}</div>}
     </div>
   );
 }

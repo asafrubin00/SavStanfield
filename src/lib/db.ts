@@ -1,6 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { get, set } from 'idb-keyval';
-import { TABLES, type DataSet, type TableName, type Tables } from './types';
+import { TABLES, type DataSet, type TableName, type Tables, type Track } from './types';
 
 const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const key = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
@@ -13,15 +13,24 @@ export function emptyData(): DataSet {
 }
 
 export interface Adapter {
+  /** Everything except the bulk of the tracks (only tracks referenced elsewhere are loaded up front). */
   loadAll(): Promise<DataSet>;
   upsert<T extends TableName>(table: T, rows: Tables[T][]): Promise<void>;
   remove(table: TableName, ids: string[]): Promise<void>;
+  /** Delete every row of a table (used when restoring a backup). */
+  clear(table: TableName): Promise<void>;
+  tracksForReleases(releaseIds: string[]): Promise<Track[]>;
+  tracksByIds(ids: string[]): Promise<Track[]>;
+  searchTracks(q: string, limit?: number): Promise<Track[]>;
+  allTracks(): Promise<Track[]>;
 }
 
 const CHUNK = 500;
 const OPTIONAL: TableName[] = ['labels', 'release_labels', 'artist_labels'];
 /** Tables the database doesn't have yet (their setup SQL hasn't been run). */
 export const missingTables = new Set<TableName>();
+/** Columns added in later updates that the database doesn't have yet. */
+export const missingColumns = new Set<string>();
 
 /** Strip the owner column Supabase returns; the app never needs it. */
 function clean<T>(row: T & { owner?: string }): T {
@@ -30,10 +39,29 @@ function clean<T>(row: T & { owner?: string }): T {
   return rest as T;
 }
 
+async function pageAll<T>(build: (from: number, to: number) => PromiseLike<{ data: unknown[] | null; error: { message: string } | null }>): Promise<T[]> {
+  const rows: T[] = [];
+  for (let from = 0; ; from += 1000) {
+    const { data, error } = await build(from, from + 999);
+    if (error) throw new Error(error.message);
+    rows.push(...(data ?? []).map((r) => clean(r as T & { owner?: string })));
+    if ((data ?? []).length < 1000) break;
+  }
+  return rows;
+}
+async function inChunks<T>(ids: string[], size: number, fn: (chunk: string[]) => Promise<T[]>): Promise<T[]> {
+  const parts: Promise<T[]>[] = [];
+  for (let i = 0; i < ids.length; i += size) parts.push(fn(ids.slice(i, i + size)));
+  return (await Promise.all(parts)).flat();
+}
+const cloudTracks = (q: (b: ReturnType<NonNullable<typeof supabase>['from']>) => ReturnType<ReturnType<NonNullable<typeof supabase>['from']>['select']>) => q(supabase!.from('tracks'));
+
 const cloudAdapter: Adapter = {
   async loadAll() {
     const out = emptyData();
-    await Promise.all(TABLES.map(async (t) => {
+    const { error: kindErr } = await supabase!.from('lists').select('kind').limit(1);
+    if (kindErr) missingColumns.add('lists.kind');
+    await Promise.all(TABLES.filter((t) => t !== 'tracks').map(async (t) => {
       const rows: unknown[] = [];
       for (let from = 0; ; from += 1000) {
         const { data, error } = await supabase!.from(t).select('*').range(from, from + 999);
@@ -47,9 +75,36 @@ const cloudAdapter: Adapter = {
       }
       (out as Record<string, unknown[]>)[t] = rows;
     }));
+    // Only tracks something points at (ratings, credits, lists) load up front; the rest load per album
+    const ref = new Set<string>();
+    for (const c of out.credits) if (c.track_id) ref.add(c.track_id);
+    for (const a of out.annotations) if (a.entity_type === 'track') ref.add(a.entity_id);
+    for (const i of out.list_items) if (i.entity_type === 'track' && i.entity_id) ref.add(i.entity_id);
+    out.tracks = await this.tracksByIds([...ref]);
     return out;
   },
+  async tracksForReleases(releaseIds) {
+    return inChunks(releaseIds, 100, (c) => pageAll<Track>((f, t) => cloudTracks((b) => b.select('*')).in('release_id', c).range(f, t)));
+  },
+  async tracksByIds(ids) {
+    return inChunks(ids, 150, (c) => pageAll<Track>((f, t) => cloudTracks((b) => b.select('*')).in('id', c).range(f, t)));
+  },
+  async searchTracks(q, limit = 12) {
+    const term = q.replace(/[%_,()]/g, ' ').trim();
+    if (term.length < 2) return [];
+    const { data, error } = await supabase!.from('tracks').select('*').ilike('title', `%${term}%`).limit(limit);
+    if (error) throw new Error(error.message);
+    return (data ?? []).map((r) => clean(r as Track & { owner?: string }));
+  },
+  async allTracks() {
+    return pageAll<Track>((f, t) => cloudTracks((b) => b.select('*')).order('id').range(f, t));
+  },
+  async clear(table) {
+    const { error } = await supabase!.from(table).delete().neq('id', '');
+    if (error) throw new Error(`Clearing ${table}: ${error.message}`);
+  },
   async upsert(table, rows) {
+    if (table === 'lists' && missingColumns.has('lists.kind')) rows = rows.map((r) => { const { kind: _k, ...rest } = r as Tables['lists']; void _k; return rest; }) as typeof rows;
     if (missingTables.has(table)) throw new Error('Labels aren’t set up in Supabase yet — run supabase/002-labels.sql');
     for (let i = 0; i < rows.length; i += CHUNK) {
       const { error } = await supabase!.from(table).upsert(rows.slice(i, i + CHUNK) as never[], { onConflict: 'owner,id' });
@@ -89,6 +144,11 @@ const localAdapter: Adapter = {
     (localCache as Record<string, { id: string }[]>)[table] = (localCache![table] as { id: string }[]).filter((r) => !drop.has(r.id));
     await persistLocal();
   },
+  async clear(table) { (localCache as Record<string, unknown[]>)[table] = []; await persistLocal(); },
+  async tracksForReleases(ids) { const s = new Set(ids); return localCache!.tracks.filter((t) => t.release_id && s.has(t.release_id)); },
+  async tracksByIds(ids) { const s = new Set(ids); return localCache!.tracks.filter((t) => s.has(t.id)); },
+  async searchTracks(q, limit = 12) { const n = q.toLowerCase(); return localCache!.tracks.filter((t) => t.title.toLowerCase().includes(n)).slice(0, limit); },
+  async allTracks() { return [...localCache!.tracks]; },
 };
 
 export const adapter: Adapter = supabase ? cloudAdapter : localAdapter;

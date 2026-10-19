@@ -115,6 +115,11 @@ export function bestMatch<T>(items: T[], title: string, artist: string, get: (t:
   return best;
 }
 
+/** Apple song link: album page with ?i=<song id> (which is what plays that song), minus tracking params. */
+export function songUrl(u?: string) {
+  if (!u) return '';
+  try { const x = new URL(u); const i = x.searchParams.get('i'); return `${x.origin}${x.pathname}${i ? `?i=${i}` : ''}`; } catch { return u; }
+}
 export const bigArt = (u?: string | null) => u?.replace(/\/\d+x\d+bb\./, '/1200x1200bb.');
 
 // ——— Apple (iTunes Search API: free, no key) ———
@@ -140,7 +145,7 @@ export async function appleFindAlbum(title: string, artist: string): Promise<App
 }
 export async function appleSearchSongs(term: string, limit = 12) {
   const r = await call<{ results: ItunesRow[] }>('itunes', 'search', { term, entity: 'song', media: 'music', limit });
-  return r.results.map((s) => ({ id: s.trackId!, title: s.trackName!, artist: s.artistName, album: s.collectionName, albumId: s.collectionId, artwork: bigArt(s.artworkUrl100), date: s.releaseDate?.slice(0, 10), url: s.trackViewUrl?.split('?')[0] ?? '' }));
+  return r.results.map((s) => ({ id: s.trackId!, title: s.trackName!, artist: s.artistName, album: s.collectionName, albumId: s.collectionId, artwork: bigArt(s.artworkUrl100), date: s.releaseDate?.slice(0, 10), url: songUrl(s.trackViewUrl) }));
 }
 export async function appleSearchArtists(term: string, limit = 8) {
   const r = await call<{ results: ItunesRow[] }>('itunes', 'search', { term, entity: 'musicArtist', media: 'music', limit });
@@ -149,7 +154,7 @@ export async function appleSearchArtists(term: string, limit = 8) {
 export async function appleAlbumTracks(collectionId: number) {
   let r = await call<{ results: ItunesRow[] }>('itunes', 'lookup', { id: collectionId, entity: 'song', limit: 200 });
   if (r.results.length < 2) r = await call<{ results: ItunesRow[] }>('itunes', 'lookup', { id: collectionId, entity: 'song', limit: 200, country: 'US' });
-  return r.results.filter((x) => x.wrapperType === 'track').map((t) => ({ id: t.trackId!, title: t.trackName!, artist: t.artistName, number: t.trackNumber ?? null, disc: t.discNumber ?? null, ms: t.trackTimeMillis ?? null, url: t.trackViewUrl?.split('?')[0] ?? '' }));
+  return r.results.filter((x) => x.wrapperType === 'track').map((t) => ({ id: t.trackId!, title: t.trackName!, artist: t.artistName, number: t.trackNumber ?? null, disc: t.discNumber ?? null, ms: t.trackTimeMillis ?? null, url: songUrl(t.trackViewUrl) }));
 }
 export async function appleArtistAlbums(artistId: number): Promise<AppleAlbum[]> {
   const r = await call<{ results: ItunesRow[] }>('itunes', 'lookup', { id: artistId, entity: 'album', limit: 200 });
@@ -282,6 +287,21 @@ export async function mbGroupLabels(mbid: string): Promise<string[]> {
   const rank = (x: typeof withLabel[0]) => `${x.status === 'Official' ? 0 : 1}${x.date || '9999'}${x.country === 'US' ? 0 : x.country === 'XW' ? 1 : 2}`;
   const rel = withLabel.sort((a, b) => rank(a).localeCompare(rank(b)))[0];
   return [...new Set((rel?.['label-info'] ?? []).map((li) => li.label?.name ?? '').flatMap(splitLabels))];
+}
+
+// ——— Tracklists ———
+export interface SourceTrack { title: string; artist?: string; number: number | null; disc: number | null; ms: number | null; links: Links; ext: Record<string, unknown> }
+export async function deezerAlbumTracks(id: number): Promise<SourceTrack[]> {
+  const r = await call<{ data?: { id: number; title: string; duration?: number; track_position?: number; disk_number?: number; link?: string; artist?: { name: string } }[] }>('deezer', `album/${id}/tracks`, { limit: 300 });
+  return (r.data ?? []).map((t, i) => ({ title: t.title, artist: t.artist?.name, number: t.track_position ?? i + 1, disc: t.disk_number ?? null, ms: t.duration ? t.duration * 1000 : null, links: t.link ? { deezer: t.link } : {}, ext: { deezer_id: t.id } }));
+}
+export async function mbGroupTracks(mbid: string): Promise<SourceTrack[]> {
+  const r = await call<{ releases: { id: string; status?: string; date?: string; country?: string }[] }>('mb', 'release', { 'release-group': mbid, limit: 25 });
+  const rank = (x: typeof r.releases[0]) => `${x.status === 'Official' ? 0 : 1}${x.date || '9999'}${x.country === 'US' ? 0 : x.country === 'XW' ? 1 : 2}`;
+  const rel = [...r.releases].sort((a, b) => rank(a).localeCompare(rank(b)))[0];
+  if (!rel) return [];
+  const d = await call<{ media?: { position?: number; tracks?: { position?: number; title: string; length?: number | null; recording?: { id: string } }[] }[] }>('mb', `release/${rel.id}`, { inc: 'recordings' });
+  return (d.media ?? []).flatMap((m) => (m.tracks ?? []).map((t, i) => ({ title: t.title, number: t.position ?? i + 1, disc: m.position ?? null, ms: t.length ?? null, links: t.recording ? { musicbrainz: `https://musicbrainz.org/recording/${t.recording.id}` } : {}, ext: t.recording ? { mb_recording: t.recording.id } : {} })));
 }
 
 // ——— SoundCloud ———

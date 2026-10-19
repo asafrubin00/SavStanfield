@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { SortSelect, usePref } from '../components/controls';
 import { Cover, QuickRate } from '../components/ui';
+import PlaylistView from './Playlist';
 import { norm, useStore, type Index } from '../lib/store';
 import type { ListItem } from '../lib/types';
 import { now, uid } from '../lib/util';
@@ -15,20 +16,24 @@ function itemView(ix: Index, it: ListItem) {
 }
 
 export function Lists() {
-  const { data, ix, upsert } = useStore();
+  const { data, ix, createList } = useStore();
   const nav = useNavigate();
   const [name, setName] = useState('');
+  const [show, setShow] = usePref('lists.show', 'all');
   const [sort, setSort] = usePref('lists.sort', 'updated');
   const size = (id: string) => ix.itemsByList.get(id)?.length ?? 0;
-  const lists = [...data.lists].sort(sort === 'az' ? (a, b) => a.name.localeCompare(b.name) : sort === 'created' ? (a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')
+  const lists = data.lists.filter((l) => show === 'all' || (l.kind ?? 'list') === show).sort(sort === 'az' ? (a, b) => a.name.localeCompare(b.name) : sort === 'created' ? (a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')
     : sort === 'size' ? (a, b) => size(b.id) - size(a.id) : (a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
   return (
     <div>
       <div className="row" style={{ marginBottom: 20 }}><h1 className="h-page">Lists</h1><span className="spacer" />
+        <div className="seg" role="group" aria-label="Show">{[['all', 'All'], ['list', 'Lists'], ['playlist', 'Playlists']].map(([v, t]) => <button key={v} className={show === v ? 'on' : ''} onClick={() => setShow(v)}>{t}</button>)}</div>
         <SortSelect value={sort} onChange={setSort} options={[['updated', 'Recently changed'], ['created', 'Newest'], ['az', 'A–Z'], ['size', 'Biggest']]} /></div>
-      <form className="row" style={{ marginBottom: 24 }} onSubmit={async (e) => { e.preventDefault(); if (!name.trim()) return; const id = uid(); await upsert('lists', [{ id, name: name.trim(), ranked: true, created_at: now(), updated_at: now() }]); nav(`/list/${id}`); }}>
-        <input className="input" style={{ width: 300 }} placeholder="New list name, e.g. Best of 2026" value={name} onChange={(e) => setName(e.target.value)} />
-        <button className="btn primary" disabled={!name.trim()}>Create list</button>
+      <form className="row" style={{ marginBottom: 24 }} onSubmit={(e) => e.preventDefault()}>
+        <input className="input" style={{ width: 300 }} placeholder="Name, e.g. Best of 2026 or Late night drive" value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="btn primary" disabled={!name.trim()} onClick={async () => { const id = await createList(name, 'playlist'); setName(''); nav(`/list/${id}`); }}>Create playlist</button>
+        <button className="btn" disabled={!name.trim()} onClick={async () => { const id = await createList(name, 'list'); setName(''); nav(`/list/${id}`); }}>Create list</button>
+        <span className="small muted">Playlists are songs you can play in order. Lists can hold anything — albums, artists, songs.</span>
       </form>
       {!lists.length ? <div className="empty">No lists yet. Make one above, or use “Add to list” on any artist, release or song.</div> : (
         <div className="grid">{lists.map((l) => {
@@ -39,7 +44,7 @@ export function Lists() {
               <div className="cover" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
                 {imgs.length === 4 ? imgs.map((s, i) => <img key={i} src={s} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />) : <Cover src={imgs[0]} title={l.name} />}
               </div>
-              <div className="t">{l.name}</div><div className="s">{items.length} item{items.length === 1 ? '' : 's'}</div>
+              <div className="t">{l.name}</div><div className="s">{l.kind === 'playlist' ? `Playlist · ${items.length} song${items.length === 1 ? '' : 's'}` : `${items.length} item${items.length === 1 ? '' : 's'}`}</div>
             </Link>);
         })}</div>
       )}
@@ -66,6 +71,7 @@ export default function ListPage() {
     ];
   }, [q, data]);
   if (!l) return <div className="empty">List not found. <Link to="/lists">All lists</Link></div>;
+  if (l.kind === 'playlist') return <PlaylistView list={l} />;
 
   const renumber = (arr: ListItem[]) => upsert('list_items', arr.map((it, i) => ({ ...it, position: i + 1 })));
   const move = (i: number, d: number) => { const a = [...items]; const j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; void renumber(a); };
