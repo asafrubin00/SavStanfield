@@ -4,7 +4,7 @@ import { AddToList, AnnotationPanel, Cover, fmtDate, LinkBar, LinksEditor, Modal
 import { autoLinkArtist } from '../lib/enrich';
 import { parseArtistCredit } from '../lib/importSheet';
 import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists, type AppleAlbum, type MBGroup } from '../lib/sources';
-import { artistLabels, norm, useStore } from '../lib/store';
+import { artistLabels, norm, trackArtists, useStore } from '../lib/store';
 import { SortSelect, usePref } from '../components/controls';
 import { RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
@@ -20,6 +20,7 @@ export default function ArtistPage() {
   const [editLinks, setEditLinks] = useState(false);
   const [editing, setEditing] = useState(false);
   const [disco, setDisco] = useState(false);
+  const [featBusy, setFeatBusy] = useState(false);
   const [merging, setMerging] = useState(false);
   const [bioOpen, setBioOpen] = useState(false);
   const [discSort, setDiscSort] = usePref('artist.discSort', 'newest');
@@ -41,7 +42,8 @@ export default function ArtistPage() {
       }
     }
     discog.sort((x, y) => (x.date ?? `${x.year}`).localeCompare(y.date ?? `${y.year}`));
-    return { discog, produced: [...produced.values()].sort((x, y) => (y.r.year ?? 0) - (x.r.year ?? 0)), appearances: [...appearances.values()] };
+    const when = (x: { r?: Release }) => x.r?.date ?? `${x.r?.year ?? ''}`;
+    return { discog, produced: [...produced.values()].sort((x, y) => (y.r.year ?? 0) - (x.r.year ?? 0)), appearances: [...appearances.values()].sort((x, y) => when(y).localeCompare(when(x))) };
   }, [credits, ix]);
 
   if (!a) return <div className="empty">This artist isn't in your library. <Link to="/artists">All artists</Link></div>;
@@ -99,6 +101,7 @@ export default function ArtistPage() {
         <AddToList type="artist" id={a.id} />
         <button className="btn" onClick={() => setEditing(true)}>Edit</button>
         <button className="btn" onClick={() => setMerging(true)}>Merge…</button>
+        <button className="btn" disabled={featBusy} title="Looks for “feat. / ft. / with …” this artist in every song title" onClick={async () => { setFeatBusy(true); try { const n = await st.findFeaturesFor(a); st.say(n ? `Found ${n} new feature${n > 1 ? 's' : ''}` : 'No new features found'); } catch (e) { st.say((e as Error).message); } finally { setFeatBusy(false); } }}>{featBusy ? 'Searching…' : 'Find features'}</button>
         {busy && <span className="small muted">{busy}</span>}
       </div>
 
@@ -128,7 +131,7 @@ export default function ArtistPage() {
             <h2 className="h-sec">Appearances <span className="muted">{appearances.length}</span></h2>
             <div className="table-wrap"><table className="table"><tbody>{appearances.map(({ r, tracks }) => (
               <tr key={r?.id ?? tracks[0].id}><td className="thumb"><Cover src={r?.artwork_url} title={r?.title ?? tracks[0].title} size={36} /></td>
-                <td>{tracks.map((t, i) => <span key={t.id}>{i ? ', ' : ''}<Link to={`/track/${t.id}`} style={{ fontWeight: 600 }}>{t.title}</Link></span>)}
+                <td>{tracks.map((t, i) => <span key={t.id}>{i ? ', ' : ''}<Link to={`/track/${t.id}`} style={{ fontWeight: 600 }}>{t.title}</Link><button className="btn sm ghost" style={{ padding: '0 4px' }} title={`Not ${a.name} — remove this appearance`} aria-label={`Remove ${a.name} from ${t.title}`} onClick={() => void st.setTrackCredits(t.id, 'featured', trackArtists(ix, t.id, 'featured').filter((x) => x.id !== a.id).map((x) => x.name))}>×</button></span>)}
                   {r && <div className="small muted">on <Link to={`/release/${r.id}`}>{r.title}</Link> · {r.artist_credit} · {r.year}</div>}</td></tr>))}</tbody></table></div>
           </section>}
           {concerts.length > 0 && <section>
@@ -151,7 +154,7 @@ export default function ArtistPage() {
 }
 
 export function ArtistForm({ artist, onClose }: { artist?: Artist; onClose: () => void }) {
-  const { upsert, ix, setArtistLabels } = useStore();
+  const { upsert, ix, setArtistLabels, findFeaturesFor, say } = useStore();
   const nav = useNavigate();
   const manualLabels = artist ? (ix.artistLabelsByArtist.get(artist.id) ?? []).map((x) => ix.labels.get(x.label_id)?.name).filter(Boolean).join(', ') : '';
   const [labels, setLabels] = useState(manualLabels);
@@ -163,7 +166,7 @@ export function ArtistForm({ artist, onClose }: { artist?: Artist; onClose: () =
         const a: Artist = { ...(artist ?? { id: uid(), links: {}, ext: {}, created_at: now() }), name: f.name.trim(), aliases: f.aliases.split(',').map((s) => s.trim()).filter(Boolean), image_url: f.image_url || null, bio: f.bio || null, is_producer: f.is_producer, updated_at: now() } as Artist;
         await upsert('artists', [a]);
         if (labels !== manualLabels) await setArtistLabels(a.id, labels.split(','));
-        onClose(); if (!artist) nav(`/artist/${a.id}`);
+        onClose(); if (!artist) { nav(`/artist/${a.id}`); void findFeaturesFor(a).then((n) => n && say(`Found ${n} feature${n > 1 ? 's' : ''} for ${a.name}`)).catch(() => undefined); }
       }}>
         <label className="full"><span className="label">Name</span><input className="input" style={{ width: '100%' }} required autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
         <label className="full"><span className="label">Other names, comma-separated (helps matching)</span><input className="input" style={{ width: '100%' }} value={f.aliases} onChange={(e) => setF({ ...f, aliases: e.target.value })} /></label>

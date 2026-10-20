@@ -12,6 +12,7 @@ import {
 } from '../lib/sources';
 import { norm, releaseArtists, releaseLabels, trackArtists, useStore } from '../lib/store';
 import PeopleInput from '../components/PeopleInput';
+import { songFeatures } from '../lib/features';
 import { RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
 
@@ -115,6 +116,12 @@ export default function ReleasePage() {
       await followThrough(st, { ...r!, artwork_url }, links, setBusy);
     } finally { setBusy(''); }
   }
+  async function addFeatured(name: string) {
+    const { artist } = st.ensureArtist(name);
+    setBusy(`Adding ${name}…`);
+    try { const n = await st.findFeaturesFor(artist); say(`Added ${name}${n ? ` · ${n} feature${n > 1 ? 's' : ''} found` : ''}`); }
+    catch (e) { say((e as Error).message); } finally { setBusy(''); }
+  }
   async function useWikiCover() {
     setBusy('Fetching the Wikipedia cover…');
     try { const c = await wikiCover(r!.links.wikipedia!); if (c) { await save({ artwork_url: c }); say('Cover taken from Wikipedia'); } else say('No cover found on the Wikipedia page'); }
@@ -188,6 +195,7 @@ export default function ReleasePage() {
           {editTracks ? <TracklistEditor release={r} tracks={tracks} onClose={() => setEditTracks(false)} /> : !tracks.length ? <div className="empty">No tracks yet. “Get tracklist” pulls it from Apple Music, Deezer, MusicBrainz or Wikipedia — or <button className="btn sm" onClick={() => setEditTracks(true)}>type it in</button></div> : (
             <ol className="tracklist">{tracks.map((t, i) => {
               const prods = trackArtists(ix, t.id, 'producer'); const feats = trackArtists(ix, t.id, 'featured');
+              const missing = songFeatures(t.title, t.artist_credit, (n) => ix.artistByName.get(norm(n))).unmatched;
               return (
                 <li key={t.id} className={playingId === t.id ? 'playing' : ''}>
                   <button className="n btn ghost sm" style={{ padding: '2px 4px' }} aria-label={`Play ${t.title}`} title="Play" onClick={() => player.play(tracks.map((x) => x.id), i, r.title)}>{playingId === t.id ? '♪' : t.number ?? i + 1}</button>
@@ -195,9 +203,10 @@ export default function ReleasePage() {
                     <Link to={`/track/${t.id}`} style={{ fontWeight: 500 }}>{t.title}</Link>
                     {t.artist_credit && <span className="muted small"> — {t.artist_credit}</span>}
                     {t.ext.stale ? <span className="small" style={{ color: 'var(--danger)' }}> · not on this release (kept because you rated or listed it) <button className="btn sm ghost" onClick={async () => { if (confirm(`Remove “${t.title}” and its rating?`)) { await st.remove('credits', (ix.creditsByTrack.get(t.id) ?? []).map((c) => c.id)); await st.remove('tracks', [t.id]); } }}>Remove</button></span> : null}
-                    {(prods.length > 0 || feats.length > 0) && <div className="credits">
+                    {(prods.length > 0 || feats.length > 0 || missing.length > 0) && <div className="credits">
                       {feats.length > 0 && <>feat. {feats.map((a, j) => <span key={a.id}>{j ? ', ' : ''}<Link to={`/artist/${a.id}`}>{a.name}</Link></span>)}{prods.length ? ' · ' : ''}</>}
                       {prods.length > 0 && <>prod. {prods.map((a, j) => <span key={a.id}>{j ? ', ' : ''}<Link to={`/artist/${a.id}`}>{a.name}</Link></span>)}</>}
+                      {missing.length > 0 && <span className="muted">{feats.length || prods.length ? ' · ' : ''}not in library: {missing.map((n, j) => <span key={n}>{j ? ', ' : ''}{n}<button className="btn sm ghost" style={{ padding: '0 4px' }} title={`Add ${n} to your library and find all their features`} aria-label={`Add ${n} to library`} onClick={() => void addFeatured(n)}>+</button></span>)}</span>}
                     </div>}
                   </span>
                   <span className="small muted num">{fmtMs(t.duration_ms)}</span>

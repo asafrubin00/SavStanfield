@@ -84,7 +84,8 @@ function TrackForm({ track, onClose }: { track: Track; onClose: () => void }) {
       <form className="form-grid" onSubmit={async (e) => {
         e.preventDefault();
         await upsert('tracks', [{ ...track, title: f.title.trim() || track.title, artist_credit: f.artist_credit || null, number: Number(f.number) || null, disc: Number(f.disc) || null, updated_at: now() }]);
-        const gone = [...await st.setTrackCredits(track.id, 'producer', prods, { prune: false }), ...await st.setTrackCredits(track.id, 'featured', feats, { prune: false })];
+        const was = (role: 'producer' | 'featured') => trackArtists(ix, track.id, role).map((a) => a.name).join('|');
+        const gone = [...(was('producer') !== prods.join('|') ? await st.setTrackCredits(track.id, 'producer', prods, { prune: false }) : []), ...(was('featured') !== feats.join('|') ? await st.setTrackCredits(track.id, 'featured', feats, { prune: false }) : [])];
         if (gone.length) await st.pruneArtists(gone);
         onClose();
       }}>

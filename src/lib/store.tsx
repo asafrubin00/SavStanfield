@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { adapter, emptyData } from './db';
 import { findReleaseLabels, findTracklist } from './enrich';
+import { songFeatures } from './features';
 import type { SourceTrack } from './sources';
 import { annId, labelKey, norm, now, uid } from './util';
 import type { Annotation, Artist, Credit, CriticScore, DataSet, EntityType, Label, ListItem, Release, TableName, Tables, Track } from './types';
@@ -88,6 +89,10 @@ interface Store {
   setTrackCredits(trackId: string, role: 'producer' | 'featured', names: string[], opts?: { prune?: boolean }): Promise<string[]>;
   /** Delete these artists if nothing (credits, ratings, notes, lists, labels) refers to them any more. */
   pruneArtists(ids: string[], removedCredits?: Set<string>): Promise<number>;
+  /** Turn "(feat. …)" in song titles into featured credits for artists already in the library. Returns credits added. */
+  linkFeatures(tracks: Track[], onlyArtistId?: string, extra?: Artist): Promise<number>;
+  /** Search every song title for this artist's name (and aliases) and credit their features. */
+  findFeaturesFor(artist: Artist): Promise<number>;
   addTracksToList(listId: string, trackIds: string[]): Promise<number>;
 }
 
@@ -169,10 +174,39 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (want.length) mergeLocal('tracks', await adapter.tracksByIds(want));
   }, [mergeLocal]);
   /** Save tracks from a background job; only keep them in memory if their album is open/loaded. */
+  const linkFeatures = useCallback(async (tracks: Track[], onlyArtistId?: string, extra?: Artist) => {
+    const ix0 = ixRef.current;
+    const extraNames = new Set(extra ? [extra.name, ...extra.aliases].map(norm) : []);
+    const lookup = (n: string) => (extraNames.has(norm(n)) ? extra : undefined) ?? ix0.artistByName.get(norm(n)) ?? ix0.artistByName.get(norm(n).replace(/^the /, ''));
+    const rows: Credit[] = []; const touched: Track[] = [];
+    for (const t of tracks) {
+      if (t.ext.feats_manual) continue; // you've set this song's features by hand
+      const { matched } = songFeatures(t.title, t.artist_credit, lookup);
+      if (!matched.length) continue;
+      const leads = new Set(t.release_id ? (ix0.creditsByRelease.get(t.release_id) ?? []).filter((c) => c.role === 'primary').map((c) => c.artist_id) : []);
+      const have = (ix0.creditsByTrack.get(t.id) ?? []).filter((c) => c.role === 'featured');
+      let pos = have.length; let added = false;
+      for (const a of matched) {
+        if (leads.has(a.id) || (onlyArtistId && a.id !== onlyArtistId) || have.some((c) => c.artist_id === a.id) || rows.some((c) => c.track_id === t.id && c.artist_id === a.id)) continue;
+        rows.push({ id: uid(), artist_id: a.id, release_id: null, track_id: t.id, role: 'featured', position: pos++ }); added = true;
+      }
+      if (added) touched.push(t);
+    }
+    if (rows.length) { await upsert('credits', rows); mergeLocal('tracks', touched); }
+    return rows.length;
+  }, [upsert, mergeLocal]);
+
+  const findFeaturesFor = useCallback(async (artist: Artist) => {
+    const found = new Map<string, Track>();
+    for (const n of [artist.name, ...artist.aliases]) if (n.trim().length >= 2) for (const t of await adapter.tracksFeaturing(n.trim())) found.set(t.id, t);
+    return linkFeatures([...found.values()], artist.id, artist);
+  }, [linkFeatures]);
+
   const saveTracksQuiet = useCallback(async (rows: Track[]) => {
     await adapter.upsert('tracks', rows);
     mergeLocal('tracks', rows.filter((t) => t.release_id && loadedReleases.current.has(t.release_id)));
-  }, [mergeLocal]);
+    await linkFeatures(rows);
+  }, [mergeLocal, linkFeatures]);
   const searchTracks = useCallback(async (q: string, limit?: number) => {
     const found = await adapter.searchTracks(q, limit);
     mergeLocal('tracks', found);
@@ -310,8 +344,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       if (!trackId || (ixRef.current.creditsByTrack.get(trackId) ?? []).some((c) => c.role === 'producer')) continue;
       names.forEach((n, i) => { const { artist } = ensureArtist(n, { is_producer: true }); if (creditArtist(artist.id, { track_id: trackId }, 'producer', i)) producers++; });
     }
+    await linkFeatures([...updated, ...fresh]);
     return { added: fresh.length, kept: keep.length, source: res.source, producers };
-  }, [mergeLocal, upsert, ensureArtist, creditArtist]);
+  }, [mergeLocal, upsert, ensureArtist, creditArtist, linkFeatures]);
 
   const pruneArtists = useCallback(async (ids: string[], removedCredits: Set<string> = new Set()) => {
     await new Promise((r) => setTimeout(r, 50)); // let the latest saves reach the in-memory data
@@ -332,6 +367,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (drop.length) await remove('credits', drop.map((c) => c.id));
     const rows: Credit[] = ids.map((artist_id, position) => ({ ...(cur.find((c) => c.artist_id === artist_id) ?? { id: uid(), artist_id, release_id: null, track_id: trackId, role }), position }));
     await upsert('credits', rows);
+    if (role === 'featured') { const t = ixRef.current.tracks.get(trackId); if (t && !t.ext.feats_manual) await upsert('tracks', [{ ...t, ext: { ...t.ext, feats_manual: true }, updated_at: now() }]); }
     if (role === 'producer') for (const id of ids) { const a = ixRef.current.artists.get(id); if (a && !a.is_producer) await upsert('artists', [{ ...a, is_producer: true, updated_at: now() }]); }
     // Tidy up: an artist with nothing else pointing at them only existed because of the removed credit
     const gone = drop.map((c) => c.artist_id).filter((id) => !ids.includes(id));
@@ -362,7 +398,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return add.length;
   }, [upsert, say]);
 
-  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList, replaceTracklist, refreshLabels, setTrackCredits, pruneArtists };
+  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList, replaceTracklist, refreshLabels, setTrackCredits, pruneArtists, linkFeatures, findFeaturesFor };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -15,7 +15,8 @@ function setTheme(t: string) {
 }
 
 export default function Settings() {
-  const { data, upsert, replaceAll, say } = useStore();
+  const { data, upsert, replaceAll, say, linkFeatures } = useStore();
+  const [featBusy, setFeatBusy] = useState('');
   const q = useLinkQueue();
   const [preview, setPreview] = useState<ImportResult | null>(null);
   const [importing, setImporting] = useState('');
@@ -131,6 +132,14 @@ export default function Settings() {
       <h2 className="h-sec">Tracklists</h2>
       <p className="muted" style={{ marginTop: 0 }}>Gets the tracklist for every release that's linked to Apple Music, Deezer or MusicBrainz, so every song can be rated, searched and added to playlists. Apple goes first because its songs can be played here. Albums that already have tracks only get the missing ones.</p>
       <button className="btn primary" disabled={!needTracks.length} onClick={() => linkQueue.add('tracks', needTracks.map((r) => r.id))}>Get tracklists for {needTracks.length.toLocaleString()} releases (~{trackSecs > 3600 ? `${(trackSecs / 3600).toFixed(1)} h` : `${Math.max(1, Math.ceil(trackSecs / 60))} min`})</button>
+
+      <h2 className="h-sec">Featured artists</h2>
+      <p className="muted" style={{ marginTop: 0 }}>Reads “feat.”, “ft.”, “featuring” and “with” in every song title and credits the artists you already have, so their pages list their appearances. Artists not in your library are skipped. New tracklists do this automatically; songs whose features you've edited by hand are left alone.</p>
+      <button className="btn primary" disabled={!!featBusy} onClick={async () => {
+        setFeatBusy('Loading every song…');
+        try { const all = await adapter.allTracks(); setFeatBusy(`Checking ${all.length.toLocaleString()} songs…`); const n = await linkFeatures(all); say(`Added ${n.toLocaleString()} featured credits`); }
+        catch (e) { say((e as Error).message); } finally { setFeatBusy(''); }
+      }}>Link featured artists</button> {featBusy && <span className="small muted">{featBusy}</span>}
 
       <h2 className="h-sec">Connections</h2>
       <button className="btn" onClick={check}>Check connections</button>

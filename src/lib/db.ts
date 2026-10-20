@@ -23,6 +23,8 @@ export interface Adapter {
   tracksByIds(ids: string[]): Promise<Track[]>;
   searchTracks(q: string, limit?: number): Promise<Track[]>;
   allTracks(): Promise<Track[]>;
+  /** Songs whose title has "feat./ft./with …name…", or whose own artist credit names them. */
+  tracksFeaturing(name: string): Promise<Track[]>;
 }
 
 const CHUNK = 500;
@@ -99,6 +101,12 @@ const cloudAdapter: Adapter = {
   async allTracks() {
     return pageAll<Track>((f, t) => cloudTracks((b) => b.select('*')).order('id').range(f, t));
   },
+  async tracksFeaturing(name) {
+    const n = name.replace(/[%_,()*"\\]/g, ' ').trim();
+    if (n.length < 2) return [];
+    const or = [`title.ilike."*feat*${n}*"`, `title.ilike."*ft*${n}*"`, `title.ilike."*with*${n}*"`, `artist_credit.ilike."*${n}*"`].join(',');
+    return pageAll<Track>((f, t) => cloudTracks((b) => b.select('*')).or(or).order('id').range(f, t));
+  },
   async clear(table) {
     const { error } = await supabase!.from(table).delete().neq('id', '');
     if (error) throw new Error(`Clearing ${table}: ${error.message}`);
@@ -149,6 +157,10 @@ const localAdapter: Adapter = {
   async tracksByIds(ids) { const s = new Set(ids); return localCache!.tracks.filter((t) => s.has(t.id)); },
   async searchTracks(q, limit = 12) { const n = q.toLowerCase(); return localCache!.tracks.filter((t) => t.title.toLowerCase().includes(n)).slice(0, limit); },
   async allTracks() { return [...localCache!.tracks]; },
+  async tracksFeaturing(name) {
+    const n = name.toLowerCase();
+    return localCache!.tracks.filter((t) => { const s = t.title.toLowerCase(); const i = s.search(/\b(feat|ft|with)\b/); return (i >= 0 && s.indexOf(n, i) > i) || (t.artist_credit ?? '').toLowerCase().includes(n); });
+  },
 };
 
 export const adapter: Adapter = supabase ? cloudAdapter : localAdapter;
