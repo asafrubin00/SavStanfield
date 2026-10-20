@@ -5,7 +5,7 @@ import { missingColumns } from '../lib/db';
 import { useStore, type Index } from '../lib/store';
 import type { List, ListItem, Release } from '../lib/types';
 import { now } from '../lib/util';
-import { Cover, Modal } from './ui';
+import { Cover, Credits, Modal, TileRate } from './ui';
 
 /** Cover images for a list: the custom cover if set, otherwise up to four covers from what's in it. */
 export function listImages(ix: Index, items: ListItem[]): string[] {
@@ -78,7 +78,7 @@ export function CoverPicker({ list, items, onClose }: { list: List; items: ListI
 }
 
 /** One tile in the covers view: an album (with the songs from it), an artist, a label or a text entry. */
-type Group = { key: string; rank?: number; release?: Release; trackIds: string[]; to?: string; title: string; sub: string; img?: string | null; round?: boolean };
+type Group = { key: string; rank?: number; release?: Release; trackIds: string[]; to?: string; title: string; sub: string; img?: string | null; round?: boolean; rate?: { type: 'release' | 'artist' | 'label' | 'track'; id: string } };
 
 /** Group list items into cover tiles, keeping the order they're given in. Songs from the same album share a tile. */
 export function groupForCovers(ix: Index, items: ListItem[], ranks?: Map<string, number>): Group[] {
@@ -90,11 +90,11 @@ export function groupForCovers(ix: Index, items: ListItem[], ranks?: Map<string,
       const t = it.entity_type === 'track' ? ix.tracks.get(id) : undefined;
       const r = it.entity_type === 'release' ? ix.releases.get(id) : t?.release_id ? ix.releases.get(t.release_id) : undefined;
       const key = r ? `r${r.id}` : `t${id}`;
-      const g = groups.get(key) ?? { key, rank, release: r, trackIds: [], to: r ? `/release/${r.id}` : t ? `/track/${t.id}` : undefined, title: r?.title ?? t?.title ?? 'Loading…', sub: r ? `${r.artist_credit ?? ''}${r.year ? ` · ${r.year}` : ''}` : t?.artist_credit ?? '', img: r?.artwork_url };
+      const g = groups.get(key) ?? { key, rank, release: r, trackIds: [], to: r ? `/release/${r.id}` : t ? `/track/${t.id}` : undefined, title: r?.title ?? t?.title ?? 'Loading…', sub: r ? `${r.artist_credit ?? ''}${r.year ? ` · ${r.year}` : ''}` : t?.artist_credit ?? '', img: r?.artwork_url, rate: r ? { type: 'release' as const, id: r.id } : t ? { type: 'track' as const, id: t.id } : undefined };
       if (t) g.trackIds.push(t.id);
       groups.set(key, g);
     } else if (it.entity_type === 'artist') {
-      const a = ix.artists.get(id); groups.set(`a${id}`, { key: `a${id}`, rank, trackIds: [], to: a ? `/artist/${id}` : undefined, title: a?.name ?? 'Removed', sub: 'Artist', img: a?.image_url, round: true });
+      const a = ix.artists.get(id); groups.set(`a${id}`, { key: `a${id}`, rank, trackIds: [], to: a ? `/artist/${id}` : undefined, title: a?.name ?? 'Removed', sub: 'Artist', img: a?.image_url, round: true, rate: a ? { type: 'artist', id } : undefined });
     } else if (it.entity_type === 'label') {
       const l = ix.labels.get(id); groups.set(`l${id}`, { key: `l${id}`, rank, trackIds: [], to: l ? `/label/${id}` : undefined, title: l?.name ?? 'Removed', sub: 'Label', img: l?.image_url });
     } else groups.set(`x${it.id}`, { key: `x${it.id}`, rank, trackIds: [], title: it.label ?? '', sub: 'Not in your library yet' });
@@ -106,13 +106,15 @@ export function CoverGrid({ groups, label, extra }: { groups: Group[]; label: st
   return (
     <div className="grid">{groups.map((g) => (
       <div key={g.key} className="tile">
-        <div style={{ position: 'relative' }}>
+        <div className="tile-cover">
           {g.to ? <Link to={g.to} style={{ display: 'block' }}><Cover src={g.img} title={g.title} round={g.round} /></Link> : <Cover src={g.img} title={g.title} />}
+          {g.rate && !g.round && <TileRate type={g.rate.type} id={g.rate.id} />}
           {g.rank && <span className="tile-rank">{g.rank}</span>}
           {g.trackIds.length > 0 && <button type="button" className="tile-play" aria-label={`Play ${g.title}`} title={`Play ${g.trackIds.length > 1 ? `these ${g.trackIds.length} songs` : 'this song'}`} onClick={() => player.play(g.trackIds, 0, label)}>▶</button>}
         </div>
         <div className="t">{g.to ? <Link to={g.to}>{g.title}</Link> : g.title}{g.release && g.release.type !== 'Album' ? <span className="muted" style={{ fontWeight: 400 }}> – {g.release.type}</span> : null}</div>
-        <div className="s">{g.sub}</div>
+        <div className="s">{g.release ? <><Credits release={g.release} />{g.release.year ? ` · ${g.release.year}` : ''}</> : g.sub}</div>
+        {g.round && g.rate && <TileRate type={g.rate.type} id={g.rate.id} inline />}
         {(g.trackIds.length > 1 || extra) && <div className="meta">{g.trackIds.length > 1 && <span>{g.trackIds.length} songs</span>}{extra?.(g)}</div>}
       </div>))}
     </div>

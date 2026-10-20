@@ -168,16 +168,31 @@ export function Credits({ release }: { release: Release }) {
   return <span>{parts}</span>;
 }
 
+/** Stars and heart over the bottom of a cover: shown on hover (always on touch screens). */
+export function TileRate({ type, id, inline }: { type: EntityType; id: string; inline?: boolean }) {
+  const { annotation, annotate } = useStore();
+  const a = annotation(type, id);
+  return (
+    <div className={inline ? 'tile-rate-inline' : 'tile-rate'}>
+      <Stars small value={a?.rating} onChange={(rating) => annotate(type, id, { rating })} />
+      <Fav on={!!a?.favorite} onToggle={() => annotate(type, id, { favorite: !a?.favorite })} />
+    </div>
+  );
+}
+
 export function ReleaseTile({ r, showArtist = true }: { r: Release; showArtist?: boolean }) {
   const { annotation } = useStore();
   const a = annotation('release', r.id);
   return (
     <div className="tile">
-      <Link to={`/release/${r.id}`} aria-label={`${r.title} by ${r.artist_credit}`}>
-        <Cover src={r.artwork_url} title={r.title} />
-      </Link>
+      <div className="tile-cover">
+        <Link to={`/release/${r.id}`} aria-label={`${r.title} by ${r.artist_credit}`}>
+          <Cover src={r.artwork_url} title={r.title} />
+        </Link>
+        <TileRate type="release" id={r.id} />
+      </div>
       <div className="t"><Link to={`/release/${r.id}`}>{r.title}</Link></div>
-      {showArtist && <div className="s">{r.artist_credit}</div>}
+      {showArtist && <div className="s"><Credits release={r} /></div>}
       <div className="meta"><span className="num">{r.year ?? '—'}</span><span>{r.type}</span>
         {a?.rating ? <span className="mini-star">{'★'.repeat(a.rating)}</span> : null}
         {a?.favorite && <span style={{ color: 'var(--fav)' }}>♥</span>}</div>

@@ -42,7 +42,9 @@ export default function Library() {
     const dec = get('decade'); const rating = get('rating'); const prod = get('producer'); const label = get('label');
     const fav = get('fav') === '1', reviewed = get('reviewed') === '1', linked = get('linked');
     const today = new Date().toISOString().slice(0, 10);
-    const upcoming = get('when');
+    const when = get('when') || 'released';
+    const thisYear = new Date().getFullYear();
+    const isUpcoming = (r: typeof data.releases[0]) => (r.date ? r.date > today : !!r.year && r.year > thisYear);
     const out = data.releases.filter((r) => {
       if (q && !norm(`${r.title} ${r.artist_credit ?? ''} ${r.label ?? ''}`).includes(q)) return false;
       if (types.length && !types.includes(r.type)) return false;
@@ -57,8 +59,8 @@ export default function Library() {
       if (prod && !producersByRelease.get(r.id)?.has(prod)) return false;
       if (linked === 'no' && (r.links.apple || r.artwork_url)) return false;
       if (linked === 'yes' && !r.links.apple) return false;
-      if (upcoming === 'upcoming' && !(r.date && r.date > today)) return false;
-      if (upcoming === 'released' && r.date && r.date > today) return false;
+      if (when === 'upcoming' && !isUpcoming(r)) return false;
+      if (when === 'released' && isUpcoming(r)) return false;
       return true;
     });
     const rv = (id: string) => ix.ann.get(`release:${id}`)?.rating ?? 0;
@@ -74,7 +76,7 @@ export default function Library() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.releases, ix, sp, producersByRelease]);
 
-  const active = [...sp.keys()].filter((k) => !['view', 'sort'].includes(k)).length;
+  const active = [...sp.keys()].filter((k) => !['view', 'sort', 'when'].includes(k)).length;
 
   return (
     <div>
@@ -97,17 +99,16 @@ export default function Library() {
             <option value="">Any</option>{producers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
           {labels.length > 0 && <label><span className="label">Label</span><select className="select" style={{ width: '100%' }} value={get('label')} onChange={(e) => set('label', e.target.value)}>
             <option value="">Any</option>{labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>}
-          <label><span className="label">Release date</span><select className="select" style={{ width: '100%' }} value={get('when')} onChange={(e) => set('when', e.target.value)}>
-            <option value="">Any</option><option value="released">Out now</option><option value="upcoming">Upcoming</option></select></label>
           <label><span className="label">Links</span><select className="select" style={{ width: '100%' }} value={get('linked')} onChange={(e) => set('linked', e.target.value)}>
             <option value="">Any</option><option value="yes">Linked to Apple Music</option><option value="no">Not linked yet</option></select></label>
           <label className="row"><input type="checkbox" checked={get('fav') === '1'} onChange={(e) => set('fav', e.target.checked ? '1' : null)} /> Favourites only</label>
           <label className="row"><input type="checkbox" checked={get('reviewed') === '1'} onChange={(e) => set('reviewed', e.target.checked ? '1' : null)} /> Has a review or notes</label>
-          {active > 0 && <button className="btn" onClick={() => setSp(new URLSearchParams(Object.fromEntries([...sp].filter(([k]) => k === 'view' || k === 'sort'))), { replace: true })}>Clear filters</button>}
+          {active > 0 && <button className="btn" onClick={() => setSp(new URLSearchParams(Object.fromEntries([...sp].filter(([k]) => k === 'view' || k === 'sort' || k === 'when'))), { replace: true })}>Clear filters</button>}
         </aside>
         <section>
           <div className="row" style={{ marginBottom: 16 }}>
             <strong className="num">{rows.length.toLocaleString()}</strong><span className="muted">release{rows.length === 1 ? '' : 's'}</span>
+            <div className="seg" role="group" aria-label="Release date">{[['', 'Released'], ['upcoming', 'Upcoming'], ['all', 'All']].map(([v, t]) => <button key={t} className={get('when') === v ? 'on' : ''} onClick={() => set('when', v || null)}>{t}</button>)}</div>
             <span className="spacer" />
             <select className="select" value={sort} onChange={(e) => set('sort', e.target.value)} aria-label="Sort">
               <option value="date-desc">Newest first</option><option value="date-asc">Oldest first</option><option value="rating">Highest rated</option>

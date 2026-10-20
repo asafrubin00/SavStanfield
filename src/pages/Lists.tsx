@@ -59,8 +59,7 @@ export default function ListPage() {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('');
   const [itemSort, setItemSort] = useState('order');
-  const [compact] = usePref('list.compact', false);
-  const [view, setView] = usePref(`list.view.${id}`, compact ? 'compact' : 'roomy');
+  const [view, setView] = usePref(`list.view.${id}`, 'compact');
   const [picking, setPicking] = useState(false);
   const results = useMemo(() => {
     const n = norm(q); if (n.length < 2) return [];
@@ -104,7 +103,7 @@ export default function ListPage() {
       <div className="row" style={{ margin: '16px 0 22px' }}>
         <label className="row"><input type="checkbox" checked={l.ranked} onChange={(e) => upsert('lists', [{ ...l, ranked: e.target.checked }])} /> Ranked</label>
         <SortSelect value={itemSort} onChange={setItemSort} options={[['order', l.ranked ? 'Ranking' : 'List order'], ['rating', 'Your rating'], ['newest', 'Newest first'], ['oldest', 'Oldest first'], ['title', 'A–Z']]} />
-        <div className="seg" role="group" aria-label="View">{[['roomy', 'Roomy'], ['compact', 'Compact'], ['covers', 'Covers']].map(([v, t]) => <button key={v} className={view === v ? 'on' : ''} onClick={() => setView(v)}>{t}</button>)}</div>
+        <div className="seg" role="group" aria-label="View">{[['compact', 'List view'], ['covers', 'Album view']].map(([v, t]) => <button key={v} className={(view === 'covers') === (v === 'covers') ? 'on' : ''} onClick={() => setView(v)}>{t}</button>)}</div>
         <span className="muted">{items.length} items</span>
         {items.length > 12 && <input className="input" placeholder="Filter this list" value={filter} onChange={(e) => setFilter(e.target.value)} />}
         <span className="spacer" />
@@ -124,7 +123,6 @@ export default function ListPage() {
         <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{shownItems.map((it) => {
           const i = items.indexOf(it); const v = itemView(ix, it);
           return (
-            view === 'compact' ? (
             <li key={it.id} style={{ display: 'grid', gridTemplateColumns: `${l.ranked ? '34px ' : ''}28px minmax(0, 1.4fr) minmax(0, 1fr) 190px`, gap: 10, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--line)', fontSize: 14 }}>
               {l.ranked && <span className="num muted" style={{ textAlign: 'right', fontWeight: 700 }}>{i + 1}</span>}
               <Cover src={v?.img} title={v?.title ?? '?'} size={28} round={v?.round} />
@@ -138,22 +136,7 @@ export default function ListPage() {
                 {l.ranked && <><button className="btn sm ghost" aria-label="Move up" disabled={i === 0 || !canMove} onClick={() => move(i, -1)}>↑</button><button className="btn sm ghost" aria-label="Move down" disabled={i === items.length - 1 || !canMove} onClick={() => move(i, 1)}>↓</button></>}
                 <button className="btn sm ghost" aria-label="Remove" onClick={async () => { await remove('list_items', [it.id]); }}>✕</button>
               </div>
-            </li>) : (
-            <li key={it.id} style={{ display: 'grid', gridTemplateColumns: `${l.ranked ? '44px ' : ''}56px 1fr auto`, gap: 14, alignItems: 'center', padding: '10px 0', borderBottom: '1px solid var(--line)' }}>
-              {l.ranked && <span className="num" style={{ fontSize: 26, fontWeight: 800, fontVariationSettings: "'wdth' 70", textAlign: 'right', color: 'var(--muted)' }}>{i + 1}</span>}
-              <Cover src={v?.img} title={v?.title ?? '?'} size={56} round={v?.round} />
-              <div style={{ minWidth: 0 }}>
-                {v?.to ? <Link to={v.to} style={{ fontWeight: 700 }}>{v.title}</Link> : <strong>{v?.title ?? 'Removed from library'}</strong>}
-                <div className="small muted">{v?.sub}{it.entity_type === 'text' && <> · <Link to={`/find?q=${encodeURIComponent((it.label ?? '').replace(/\s*\(\d{4}\)$/, '').replace(' — ', ' '))}`}>find it</Link></>}</div>
-                <input className="input small" style={{ width: '100%', marginTop: 4, background: 'transparent', borderColor: 'transparent' }} placeholder="Add a note" defaultValue={it.note ?? ''}
-                  onBlur={(e) => e.target.value !== (it.note ?? '') && upsert('list_items', [{ ...it, note: e.target.value || null }])} />
-              </div>
-              <div className="row" style={{ flexWrap: 'nowrap', gap: 4 }}>
-                {it.entity_type !== 'text' && it.entity_id && <QuickRate type={it.entity_type} id={it.entity_id} />}
-                {l.ranked && <><button className="btn sm ghost" aria-label="Move up" disabled={i === 0 || !canMove} onClick={() => move(i, -1)}>Up</button><button className="btn sm ghost" aria-label="Move down" disabled={i === items.length - 1 || !canMove} onClick={() => move(i, 1)}>Down</button></>}
-                <button className="btn sm ghost" onClick={async () => { await remove('list_items', [it.id]); }}>Remove</button>
-              </div>
-            </li>));
+            </li>);
         })}</ol>
       )}
     </div>

@@ -214,3 +214,18 @@ details summary { cursor: pointer; }
 .list-cover-edit { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px; background: rgba(0,0,0,.6); color: #fff; font-size: 13px; text-align: center; opacity: 0; transition: opacity .15s; }
 .list-cover:hover .list-cover-edit, .list-cover:focus-visible .list-cover-edit { opacity: 1; }
 @media (hover: none) { .list-cover-edit { opacity: .85; } }
+
+/* Rate and favourite straight from a cover */
+.tile-cover { position: relative; }
+.tile-rate { position: absolute; left: 0; right: 0; bottom: 0; display: flex; align-items: center; justify-content: space-between; gap: 4px; padding: 5px 8px; background: linear-gradient(transparent, rgba(0,0,0,.78) 45%); opacity: 0; transition: opacity .15s; }
+.tile-rate .stars button { font-size: 17px; cursor: pointer; color: rgba(255,255,255,.5); }
+.tile-rate .stars button.on { color: var(--star); }
+.tile-rate .fav { font-size: 18px; color: rgba(255,255,255,.5); }
+.tile-rate .fav.on { color: var(--fav); }
+.tile-cover:hover .tile-rate, .tile-cover:focus-within .tile-rate { opacity: 1; }
+@media (hover: none) { .tile-rate { opacity: 1; background: linear-gradient(transparent, rgba(0,0,0,.6) 45%); } }
+.tile .s a { color: inherit; }
+.tile .s a:hover { text-decoration: underline; color: var(--ink); }
+.tile-rate-inline { display: flex; align-items: center; gap: 4px; margin-top: 2px; }
+.tile-rate-inline .stars button { font-size: 15px; cursor: pointer; }
+.tile-rate-inline .fav { font-size: 16px; }
