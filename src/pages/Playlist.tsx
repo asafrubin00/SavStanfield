@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { SortSelect } from '../components/controls';
+import { SortSelect, usePref } from '../components/controls';
+import { CoverGrid, CoverPicker, groupForCovers, ListCover } from '../components/ListBits';
 import { Cover, fmtMs, QuickRate } from '../components/ui';
 import { adapter } from '../lib/db';
 import { player, trackEmbed, usePlayer } from '../lib/player';
@@ -25,6 +26,8 @@ export default function PlaylistView({ list: l }: { list: List }) {
   const items = useMemo(() => [...(ix.itemsByList.get(l.id) ?? [])].filter((i) => i.entity_type === 'track').sort((a, b) => a.position - b.position), [ix, l.id]);
   useEffect(() => { void st.loadTracks(items.map((i) => i.entity_id!).filter(Boolean)); }, [items.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const [sort, setSort] = useState('order');
+  const [view, setView] = usePref(`list.view.${l.id}`, 'songs');
+  const [picking, setPicking] = useState(false);
   const [q, setQ] = useState('');
   const [found, setFound] = useState<Track[]>([]);
   useEffect(() => {
@@ -46,7 +49,6 @@ export default function PlaylistView({ list: l }: { list: List }) {
   const shown = sort === 'order' ? rows : [...rows].sort(cmp[sort]);
   const ids = shown.map((x) => x.t?.id).filter(Boolean) as string[];
   const total = rows.reduce((s, x) => s + (x.t?.duration_ms ?? 0), 0);
-  const covers = [...new Set(rows.map((x) => x.r?.artwork_url).filter(Boolean))].slice(0, 4) as string[];
   const playing = ps.ids.length ? ps.ids[ps.index] : null;
 
   const renumber = (arr: ListItem[]) => upsert('list_items', arr.map((it, i) => ({ ...it, position: i + 1 })));
@@ -62,9 +64,7 @@ export default function PlaylistView({ list: l }: { list: List }) {
   return (
     <div>
       <div className="hero" style={{ gridTemplateColumns: 'minmax(140px, 220px) 1fr', alignItems: 'end' }}>
-        <div className="cover" style={{ display: 'grid', gridTemplateColumns: covers.length >= 4 ? '1fr 1fr' : '1fr' }}>
-          {covers.length >= 4 ? covers.map((c, i) => <img key={i} src={c} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />) : <Cover src={covers[0]} title={l.name} />}
-        </div>
+        <ListCover list={l} items={items} onClick={() => setPicking(true)} />
         <div>
           <div className="muted" style={{ marginBottom: 6 }}>Playlist</div>
           <input className="hero-title" style={{ border: 0, background: 'transparent', width: '100%', padding: 0, color: 'inherit' }} value={l.name} aria-label="Playlist name" onChange={(e) => upsert('lists', [{ ...l, name: e.target.value, updated_at: now() }])} />
@@ -75,6 +75,7 @@ export default function PlaylistView({ list: l }: { list: List }) {
       <div className="row" style={{ margin: '18px 0' }}>
         <button className="btn primary" disabled={!ids.length} onClick={() => player.play(ids, 0, l.name)}>Play</button>
         <button className="btn" disabled={!ids.length} onClick={() => player.shuffle(ids, l.name)}>Shuffle</button>
+        <div className="seg" role="group" aria-label="View"><button className={view !== 'albums' ? 'on' : ''} onClick={() => setView('songs')}>Songs</button><button className={view === 'albums' ? 'on' : ''} onClick={() => setView('albums')}>Albums</button></div>
         <SortSelect value={sort} onChange={setSort} options={[['order', 'Playlist order'], ['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['length', 'Length'], ['rating', 'Your rating'], ['newest', 'Newest release']]} />
         <span className="spacer" />
         <button className="btn" disabled={!rows.length} onClick={exportCsv} title="Spreadsheet with Apple Music links">Export CSV</button>
@@ -106,7 +107,10 @@ export default function PlaylistView({ list: l }: { list: List }) {
         )}
       </div>
 
-      {!rows.length ? <div className="empty">No songs yet. Search above, or use “+ Playlist” on any album’s tracklist.</div> : (
+      {picking && <CoverPicker list={l} items={items} onClose={() => setPicking(false)} />}
+      {!rows.length ? <div className="empty">No songs yet. Search above, or use “+ Playlist” on any album’s tracklist.</div> : view === 'albums' ? (
+        <CoverGrid groups={groupForCovers(ix, shown.map((x) => x.it))} label={l.name} />
+      ) : (
         <div className="table-wrap"><table className="table">
           <thead><tr><th style={{ width: 36 }}>#</th><th className="thumb" /><th>Title</th><th>Album</th><th style={{ textAlign: 'right' }}>Length</th><th /><th /></tr></thead>
           <tbody>{shown.map((x) => {

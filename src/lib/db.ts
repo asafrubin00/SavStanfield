@@ -63,6 +63,8 @@ const cloudAdapter: Adapter = {
     const out = emptyData();
     const { error: kindErr } = await supabase!.from('lists').select('kind').limit(1);
     if (kindErr) missingColumns.add('lists.kind');
+    const { error: coverErr } = await supabase!.from('lists').select('cover_url').limit(1);
+    if (coverErr) missingColumns.add('lists.cover_url');
     await Promise.all(TABLES.filter((t) => t !== 'tracks').map(async (t) => {
       const rows: unknown[] = [];
       for (let from = 0; ; from += 1000) {
@@ -113,6 +115,7 @@ const cloudAdapter: Adapter = {
   },
   async upsert(table, rows) {
     if (table === 'lists' && missingColumns.has('lists.kind')) rows = rows.map((r) => { const { kind: _k, ...rest } = r as Tables['lists']; void _k; return rest; }) as typeof rows;
+    if (table === 'lists' && missingColumns.has('lists.cover_url')) rows = rows.map((r) => { const { cover_url: _c, ...rest } = r as Tables['lists']; void _c; return rest; }) as typeof rows;
     if (missingTables.has(table)) throw new Error('Labels aren’t set up in Supabase yet — run supabase/002-labels.sql');
     for (let i = 0; i < rows.length; i += CHUNK) {
       const { error } = await supabase!.from(table).upsert(rows.slice(i, i + CHUNK) as never[], { onConflict: 'owner,id' });

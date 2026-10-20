@@ -3,6 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { SortSelect, usePref } from '../components/controls';
 import { Cover, QuickRate } from '../components/ui';
 import PlaylistView from './Playlist';
+import { CoverGrid, CoverPicker, groupForCovers, ListCover } from '../components/ListBits';
 import { norm, useStore, type Index } from '../lib/store';
 import type { ListItem } from '../lib/types';
 import { now, uid } from '../lib/util';
@@ -38,12 +39,9 @@ export function Lists() {
       {!lists.length ? <div className="empty">No lists yet. Make one above, or use “Add to list” on any artist, release or song.</div> : (
         <div className="grid">{lists.map((l) => {
           const items = [...(ix.itemsByList.get(l.id) ?? [])].sort((a, b) => a.position - b.position);
-          const imgs = items.map((i) => itemView(ix, i)?.img).filter(Boolean).slice(0, 4) as string[];
           return (
             <Link key={l.id} to={`/list/${l.id}`} className="tile" style={{ textDecoration: 'none' }}>
-              <div className="cover" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr' }}>
-                {imgs.length === 4 ? imgs.map((s, i) => <img key={i} src={s} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />) : <Cover src={imgs[0]} title={l.name} />}
-              </div>
+              <ListCover list={l} items={items} />
               <div className="t">{l.name}</div><div className="s">{l.kind === 'playlist' ? `Playlist · ${items.length} song${items.length === 1 ? '' : 's'}` : `${items.length} item${items.length === 1 ? '' : 's'}`}</div>
             </Link>);
         })}</div>
@@ -61,7 +59,9 @@ export default function ListPage() {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('');
   const [itemSort, setItemSort] = useState('order');
-  const [compact, setCompact] = usePref('list.compact', false);
+  const [compact] = usePref('list.compact', false);
+  const [view, setView] = usePref(`list.view.${id}`, compact ? 'compact' : 'roomy');
+  const [picking, setPicking] = useState(false);
   const results = useMemo(() => {
     const n = norm(q); if (n.length < 2) return [];
     return [
@@ -92,12 +92,19 @@ export default function ListPage() {
 
   return (
     <div>
-      <input className="h-page" style={{ border: 0, background: 'transparent', width: '100%', padding: 0 }} value={l.name} aria-label="List name" onChange={(e) => upsert('lists', [{ ...l, name: e.target.value, updated_at: now() }])} />
-      <input className="input" style={{ width: '100%', marginTop: 10, background: 'transparent' }} placeholder="Add a description" value={l.description ?? ''} onChange={(e) => upsert('lists', [{ ...l, description: e.target.value }])} />
+      <div className="hero" style={{ gridTemplateColumns: 'minmax(120px, 180px) 1fr', alignItems: 'end' }}>
+        <ListCover list={l} items={items} onClick={() => setPicking(true)} />
+        <div>
+          <div className="muted" style={{ marginBottom: 6 }}>List</div>
+          <input className="h-page" style={{ border: 0, background: 'transparent', width: '100%', padding: 0 }} value={l.name} aria-label="List name" onChange={(e) => upsert('lists', [{ ...l, name: e.target.value, updated_at: now() }])} />
+          <input className="input" style={{ width: '100%', marginTop: 10, background: 'transparent' }} placeholder="Add a description" value={l.description ?? ''} onChange={(e) => upsert('lists', [{ ...l, description: e.target.value }])} />
+        </div>
+      </div>
+      {picking && <CoverPicker list={l} items={items} onClose={() => setPicking(false)} />}
       <div className="row" style={{ margin: '16px 0 22px' }}>
         <label className="row"><input type="checkbox" checked={l.ranked} onChange={(e) => upsert('lists', [{ ...l, ranked: e.target.checked }])} /> Ranked</label>
         <SortSelect value={itemSort} onChange={setItemSort} options={[['order', l.ranked ? 'Ranking' : 'List order'], ['rating', 'Your rating'], ['newest', 'Newest first'], ['oldest', 'Oldest first'], ['title', 'A–Z']]} />
-        <div className="seg" role="group" aria-label="View"><button className={!compact ? 'on' : ''} onClick={() => setCompact(false)}>Roomy</button><button className={compact ? 'on' : ''} onClick={() => setCompact(true)}>Compact</button></div>
+        <div className="seg" role="group" aria-label="View">{[['roomy', 'Roomy'], ['compact', 'Compact'], ['covers', 'Covers']].map(([v, t]) => <button key={v} className={view === v ? 'on' : ''} onClick={() => setView(v)}>{t}</button>)}</div>
         <span className="muted">{items.length} items</span>
         {items.length > 12 && <input className="input" placeholder="Filter this list" value={filter} onChange={(e) => setFilter(e.target.value)} />}
         <span className="spacer" />
@@ -111,11 +118,13 @@ export default function ListPage() {
           <button className="dd-item btn ghost" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={() => add('text', null, q.trim())}>Add “{q.trim()}” as a text item</button>
         </div>}
       </div>
-      {!items.length ? <div className="empty">This list is empty. Search above, or use “Add to list” on any page.</div> : (
+      {!items.length ? <div className="empty">This list is empty. Search above, or use “Add to list” on any page.</div> : view === 'covers' ? (
+        <CoverGrid groups={groupForCovers(ix, shownItems, l.ranked ? new Map(items.map((it, i) => [it.id, i + 1])) : undefined)} label={l.name} />
+      ) : (
         <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{shownItems.map((it) => {
           const i = items.indexOf(it); const v = itemView(ix, it);
           return (
-            compact ? (
+            view === 'compact' ? (
             <li key={it.id} style={{ display: 'grid', gridTemplateColumns: `${l.ranked ? '34px ' : ''}28px minmax(0, 1.4fr) minmax(0, 1fr) 190px`, gap: 10, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--line)', fontSize: 14 }}>
               {l.ranked && <span className="num muted" style={{ textAlign: 'right', fontWeight: 700 }}>{i + 1}</span>}
               <Cover src={v?.img} title={v?.title ?? '?'} size={28} round={v?.round} />

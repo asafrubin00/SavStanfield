@@ -204,3 +204,13 @@ details summary { cursor: pointer; }
 .tracklist-edit .te-fields { display: grid; gap: 6px; min-width: 0; }
 .tracklist-edit .te-two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
 @media (max-width: 720px) { .tracklist-edit .te-two { grid-template-columns: 1fr; } }
+
+/* Cover tiles in lists and playlists */
+.tile-rank { position: absolute; left: 6px; top: 6px; min-width: 26px; padding: 1px 7px; border-radius: 999px; background: rgba(0,0,0,.72); color: #fff; font-weight: 800; font-size: 13px; text-align: center; }
+.tile-play { position: absolute; right: 8px; bottom: 8px; width: 38px; height: 38px; border-radius: 50%; border: 0; background: var(--accent); color: #fff; font-size: 14px; cursor: pointer; box-shadow: 0 2px 8px rgba(0,0,0,.35); opacity: 0; transform: translateY(4px); transition: opacity .15s, transform .15s; }
+.tile:hover .tile-play, .tile-play:focus-visible { opacity: 1; transform: none; }
+@media (hover: none) { .tile-play { opacity: .92; transform: none; } }
+.list-cover { position: relative; }
+.list-cover-edit { position: absolute; left: 0; right: 0; bottom: 0; padding: 6px; background: rgba(0,0,0,.6); color: #fff; font-size: 13px; text-align: center; opacity: 0; transition: opacity .15s; }
+.list-cover:hover .list-cover-edit, .list-cover:focus-visible .list-cover-edit { opacity: 1; }
+@media (hover: none) { .list-cover-edit { opacity: .85; } }
