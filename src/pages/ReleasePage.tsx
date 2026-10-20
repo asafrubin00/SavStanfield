@@ -1,17 +1,17 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, fmtMs, LinkBar, LinksEditor, Modal, QuickRate } from '../components/ui';
-import { autoLinkRelease, findReleaseLabels, followLinks } from '../lib/enrich';
+import { autoLinkRelease, findReleaseLabels, followLinks, tracklistSources } from '../lib/enrich';
 import AddToPlaylist from '../components/AddToPlaylist';
 import { player, usePlayer } from '../lib/player';
 import { parseArtistCredit } from '../lib/importSheet';
 import { fantanoSearch, mergeLinks } from '../lib/links';
 import {
-  appleAlbumTracks, appleCatalogueMatches, appleEmbed, appleFindAlbum, appleSearchAlbums, artistMatch, geniusSearch, geniusSong, mbLinks, mbSearchGroups,
-  pickApple, soundcloudEmbed, soundcloudOembed, titleScore, wikiSearch, wikidataToWikipedia, youtubeEmbed, youtubeSearch, type AppleAlbum, type GeniusHit, type MBGroup,
+  appleCatalogueMatches, appleEmbed, appleFindAlbum, appleSearchAlbums, artistMatch, geniusSearch, geniusSong, mbLinks, mbSearchGroups,
+  pickApple, wikiCover, type SourceTrack, soundcloudEmbed, soundcloudOembed, titleScore, wikiSearch, wikidataToWikipedia, youtubeEmbed, youtubeSearch, type AppleAlbum, type GeniusHit, type MBGroup,
 } from '../lib/sources';
-import { norm, releaseArtists, releaseLabels, trackArtists, useStore } from '../lib/store';
-import { RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
+import { releaseArtists, releaseLabels, trackArtists, useStore } from '../lib/store';
+import { RELEASE_TYPES, type Artist, type Release } from '../lib/types';
 import { now, uid } from '../lib/util';
 
 export default function ReleasePage() {
@@ -23,6 +23,7 @@ export default function ReleasePage() {
   const [editLinks, setEditLinks] = useState(false);
   const [editing, setEditing] = useState(false);
   const [matching, setMatching] = useState(false);
+  const [choosing, setChoosing] = useState(false);
   const [busy, setBusy] = useState('');
   const [embed, setEmbed] = useState<'apple' | 'youtube' | 'soundcloud' | null>(null);
   const [yt, setYt] = useState<Awaited<ReturnType<typeof youtubeSearch>> | null>(null);
@@ -54,23 +55,17 @@ export default function ReleasePage() {
   }
 
   async function fetchTracks() {
-    let appleId = r!.ext.apple_id as number | undefined;
     setBusy('Fetching tracklist…');
     try {
-      if (!appleId) {
-        const c = await appleFindAlbum(r!.title, artistName);
+      let rel = r!;
+      if (!rel.ext.apple_id) {
+        const c = await appleFindAlbum(rel.title, artistName);
         if (!c) { say('Couldn’t find this on Apple Music. Use “Match by hand” first.'); return; }
-        appleId = c.id;
-        await save({ ext: { ...r!.ext, apple_id: c.id }, links: mergeLinks(r!.links, { apple: c.url }), artwork_url: r!.artwork_url ?? c.artwork });
+        rel = { ...rel, ext: { ...rel.ext, apple_id: c.id }, links: mergeLinks(rel.links, { apple: c.url }), artwork_url: rel.artwork_url ?? c.artwork ?? null, updated_at: now() };
+        await upsert('releases', [rel]);
       }
-      const got = await appleAlbumTracks(appleId);
-      const have = new Set(tracks.map((t) => norm(t.title)));
-      const fresh: Track[] = got.filter((t) => !have.has(norm(t.title))).map((t) => ({
-        id: uid(), release_id: r!.id, disc: t.disc, number: t.number, title: t.title, artist_credit: norm(t.artist) === norm(r!.artist_credit ?? '') ? null : t.artist,
-        duration_ms: t.ms, links: t.url ? { apple: t.url } : {}, ext: { apple_id: t.id }, created_at: now(), updated_at: now(),
-      }));
-      await upsert('tracks', fresh);
-      say(fresh.length ? `Added ${fresh.length} tracks` : 'Tracklist already up to date');
+      const res = await st.replaceTracklist(rel);
+      say(res.source ? `Tracklist from ${res.source}: ${res.added} tracks` : 'No tracklist found');
     } catch (e) { say((e as Error).message); } finally { setBusy(''); }
   }
 
@@ -118,10 +113,9 @@ export default function ReleasePage() {
       await followThrough(st, { ...r!, artwork_url }, links, setBusy);
     } finally { setBusy(''); }
   }
-  async function replaceTracks() {
-    if (!confirm('Replace this tracklist with the one from the release’s current Apple Music / Deezer / MusicBrainz link? Songs you’ve rated or put on a list are kept.')) return;
-    setBusy('Replacing tracklist…');
-    try { const res = await st.replaceTracklist(r!); say(res.source ? `Tracklist from ${res.source}: ${res.added} new, ${res.kept} kept` : 'No tracklist found for the current links'); }
+  async function useWikiCover() {
+    setBusy('Fetching the Wikipedia cover…');
+    try { const c = await wikiCover(r!.links.wikipedia!); if (c) { await save({ artwork_url: c }); say('Cover taken from Wikipedia'); } else say('No cover found on the Wikipedia page'); }
     catch (e) { say((e as Error).message); } finally { setBusy(''); }
   }
   async function findLabels() {
@@ -155,8 +149,8 @@ export default function ReleasePage() {
       <div className="row" style={{ marginBottom: 8 }}>
         <button className="btn primary" disabled={!!busy} onClick={quickLink}>Find links &amp; artwork</button>
         <button className="btn" disabled={!!busy} onClick={() => setMatching(true)}>Match by hand</button>
-        {tracks.length ? <button className="btn" disabled={!!busy} onClick={replaceTracks} title="Use when the tracklist is from the wrong album">Replace tracklist</button>
-          : <button className="btn" disabled={!!busy} onClick={fetchTracks}>Get tracklist</button>}
+        <button className="btn" disabled={!!busy} onClick={() => setChoosing(true)} title="Choose where the tracklist comes from">{tracks.length ? 'Replace tracklist' : 'Get tracklist'}</button>
+        {r.links.wikipedia && <button className="btn" disabled={!!busy} onClick={useWikiCover} title="The cover shown on the album’s Wikipedia page">Use Wikipedia cover</button>}
         <button className="btn" disabled={!!busy || !tracks.length} onClick={fetchProducers} title="Looks up each song on Genius">Get producer credits</button>
         {!relLabels.length && <button className="btn" disabled={!!busy || !(r.ext.deezer_id || r.ext.mbid || r.ext.apple_id)} onClick={findLabels} title="From Deezer, MusicBrainz or Apple Music">Find labels</button>}
         <AddToList type="release" id={r.id} />
@@ -232,6 +226,7 @@ export default function ReleasePage() {
 
       {editLinks && <LinksEditor links={r.links} onClose={() => setEditLinks(false)} onSave={(links) => void saveLinks(links)} />}
       {editing && <ReleaseForm release={r} onClose={() => setEditing(false)} />}
+      {choosing && <TracklistChooser release={r} hasTracks={tracks.length > 0} onClose={() => setChoosing(false)} onAppleSearch={() => { setChoosing(false); void fetchTracks(); }} />}
       {matching && <MatchWizard release={r} artistName={artistName} onClose={() => setMatching(false)} />}
     </div>
   );
@@ -315,6 +310,44 @@ export function ReleaseForm({ release, onClose, defaults }: { release?: Release;
  * Save new links and make everything follow them: the chosen source's ID and cover, then (if the source
  * changed) a fresh tracklist and labels from it.
  */
+/** Pick the tracklist source: each linked source is fetched and shown with its track count first. */
+function TracklistChooser({ release, hasTracks, onClose, onAppleSearch }: { release: Release; hasTracks: boolean; onClose: () => void; onAppleSearch: () => void }) {
+  const st = useStore();
+  const sources = useMemo(() => tracklistSources(release), [release]);
+  const [got, setGot] = useState<Record<string, SourceTrack[] | string>>({});
+  const [saving, setSaving] = useState('');
+  useEffect(() => {
+    let live = true;
+    for (const [name, fn] of sources) fn().then((t) => live && setGot((g) => ({ ...g, [name]: t.length ? t : 'No tracklist found' })), (e: Error) => live && setGot((g) => ({ ...g, [name]: e.message })));
+    return () => { live = false; };
+  }, [sources]);
+  async function use(source: string, tracks: SourceTrack[]) {
+    if (hasTracks && !confirm(`Replace the tracklist with ${tracks.length} tracks from ${source}? Songs you’ve rated or put on a list are kept.`)) return;
+    setSaving(source);
+    try {
+      const res = await st.replaceTracklist(release, { source, tracks });
+      st.say(`Tracklist from ${source}: ${res.added} new${res.kept ? `, ${res.kept} kept` : ''}${res.producers ? ` · ${res.producers} producer credits` : ''}`);
+      onClose();
+    } catch (e) { st.say((e as Error).message); setSaving(''); }
+  }
+  const total = (t: SourceTrack[]) => { const ms = t.reduce((s, x) => s + (x.ms ?? 0), 0); return ms ? ` · ${fmtMs(ms)}` : ''; };
+  return (
+    <Modal title={hasTracks ? 'Replace tracklist' : 'Get tracklist'} onClose={onClose}>
+      <p className="muted" style={{ marginTop: 0 }}>From the sources this release is linked to. Wrong album everywhere? Fix the links first with Match by hand or Edit links.</p>
+      {sources.map(([name]) => { const v = got[name]; return (
+        <div key={name} className="panel" style={{ marginBottom: 10, padding: 12 }}>
+          <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'nowrap' }}>
+            <div><strong>{name}</strong> <span className="muted small">{v === undefined ? 'Loading…' : typeof v === 'string' ? v : `${v.length} tracks${total(v)}${v.some((t) => t.producers?.length) ? ' · with producers' : ''}`}</span></div>
+            <button className="btn sm primary" disabled={!Array.isArray(v) || !!saving} onClick={() => Array.isArray(v) && use(name, v)}>{saving === name ? 'Saving…' : 'Use this'}</button>
+          </div>
+          {Array.isArray(v) && <div className="small muted" style={{ marginTop: 6 }}>{v.slice(0, 6).map((t) => t.title).join(' · ')}{v.length > 6 ? ' …' : ''}</div>}
+        </div>); })}
+      {!release.ext.apple_id && <div className="panel" style={{ padding: 12 }}><div className="row" style={{ justifyContent: 'space-between' }}><span><strong>Apple Music</strong> <span className="muted small">not linked yet</span></span><button className="btn sm" onClick={onAppleSearch}>Search Apple Music</button></div></div>}
+      {!sources.length && <div className="small muted" style={{ marginTop: 8 }}>No linked sources yet — add a Wikipedia, Deezer or MusicBrainz link with Edit links.</div>}
+    </Modal>
+  );
+}
+
 async function followThrough(st: ReturnType<typeof useStore>, rel: Release, links: Release['links'], status?: (s: string) => void) {
   const { patch, changed } = await followLinks(rel, links);
   const next = { ...rel, ...patch } as Release;

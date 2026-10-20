@@ -1,6 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { adapter, emptyData } from './db';
 import { findReleaseLabels, findTracklist } from './enrich';
+import type { SourceTrack } from './sources';
 import { annId, labelKey, norm, now, uid } from './util';
 import type { Annotation, Artist, Credit, CriticScore, DataSet, EntityType, Label, ListItem, Release, TableName, Tables, Track } from './types';
 
@@ -79,7 +80,8 @@ interface Store {
   searchTracks(q: string, limit?: number): Promise<Track[]>;
   createList(name: string, kind: 'list' | 'playlist'): Promise<string>;
   /** Swap a release's tracklist for the one from its current sources. Songs you've rated, credited or put on a list are kept. */
-  replaceTracklist(release: Release): Promise<{ added: number; kept: number; source: string | null }>;
+  /** Replace the tracklist from the best source, or a chosen one (tracks already fetched can be passed in). */
+  replaceTracklist(release: Release, from?: { source: string; tracks: SourceTrack[] }): Promise<{ added: number; kept: number; source: string | null; producers: number }>;
   /** Re-read labels from the release's current sources and replace the ones found automatically. */
   refreshLabels(release: Release): Promise<string[]>;
   addTracksToList(listId: string, trackIds: string[]): Promise<number>;
@@ -269,9 +271,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await remove('labels', [id]);
   }, [remove]);
 
-  const replaceTracklist = useCallback(async (release: Release) => {
-    const res = await findTracklist(release);
-    if (!res.tracks.length) return { added: 0, kept: 0, source: null };
+  const replaceTracklist = useCallback(async (release: Release, from?: { source: string; tracks: SourceTrack[] }) => {
+    const res = from ?? await findTracklist(release);
+    if (!res.tracks.length) return { added: 0, kept: 0, source: null, producers: 0 };
     const existing = await adapter.tracksForReleases([release.id]);
     const d = dataRef.current;
     const used = new Set<string>([
@@ -282,12 +284,13 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     const keep = existing.filter((t) => used.has(t.id));
     const keepByTitle = new Map(keep.map((t) => [norm(t.title), t]));
     const albumArtist = norm(release.artist_credit ?? '');
-    const fresh: Track[] = []; const updated: Track[] = [];
+    const fresh: Track[] = []; const updated: Track[] = []; const prod: [string, string[]][] = [];
     for (const t of res.tracks) {
       const k = keepByTitle.get(norm(t.title));
+      if (t.producers?.length) prod.push([k?.id ?? '', t.producers]);
       const base = { disc: t.disc, number: t.number, duration_ms: t.ms, artist_credit: t.artist && norm(t.artist) !== albumArtist ? t.artist : null, updated_at: now() };
       if (k) { updated.push({ ...k, ...base, links: { ...k.links, ...t.links }, ext: { ...k.ext, ...t.ext, stale: undefined } }); keepByTitle.delete(norm(t.title)); }
-      else fresh.push({ id: uid(), release_id: release.id, title: t.title, ...base, links: t.links, ext: t.ext, created_at: now() });
+      else { fresh.push({ id: uid(), release_id: release.id, title: t.title, ...base, links: t.links, ext: t.ext, created_at: now() }); if (t.producers?.length) prod[prod.length - 1][0] = fresh[fresh.length - 1].id; }
     }
     // Songs you'd rated that aren't on the right tracklist stay, marked so you can tidy them
     for (const k of keepByTitle.values()) updated.push({ ...k, ext: { ...k.ext, stale: true }, updated_at: now() });
@@ -297,8 +300,14 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     if (loadedReleases.current.has(release.id)) mergeLocal('tracks', [...updated, ...fresh]);
     const cur = ixRef.current.releases.get(release.id) ?? release;
     await upsert('releases', [{ ...cur, ext: { ...cur.ext, tracks_at: now(), track_count: res.tracks.length, tracks_src: res.source ?? undefined }, updated_at: now() }]);
-    return { added: fresh.length, kept: keep.length, source: res.source };
-  }, [mergeLocal, upsert]);
+    // Producer credits that came with the tracklist (Wikipedia lists them per song)
+    let producers = 0;
+    for (const [trackId, names] of prod) {
+      if (!trackId || (ixRef.current.creditsByTrack.get(trackId) ?? []).some((c) => c.role === 'producer')) continue;
+      names.forEach((n, i) => { const { artist } = ensureArtist(n, { is_producer: true }); if (creditArtist(artist.id, { track_id: trackId }, 'producer', i)) producers++; });
+    }
+    return { added: fresh.length, kept: keep.length, source: res.source, producers };
+  }, [mergeLocal, upsert, ensureArtist, creditArtist]);
 
   const refreshLabels = useCallback(async (release: Release) => {
     const res = await findReleaseLabels(release);

@@ -1,6 +1,6 @@
 import { mergeLinks } from './links';
 import {
-  appleAlbumById, appleAlbumLabel, appleAlbumTracks, appleFindAlbum, appleIdFromUrl, deezerAlbumInfo, deezerIdFromUrl, mbGroupInfo, mbidFromUrl, deezerAlbumTracks, mbGroupTracks, type SourceTrack, appleSearchArtists, deezerAlbumLabel, mbGroupLabels, soundcloudSearch, ARTIST_OK, artistMatch, bestMatch, caaCover, deezerAlbum, deezerArtist, deezerSearchAlbums,
+  appleAlbumById, appleAlbumLabel, wikiCover, wikiTracks, appleAlbumTracks, appleFindAlbum, appleIdFromUrl, deezerAlbumInfo, deezerIdFromUrl, mbGroupInfo, mbidFromUrl, deezerAlbumTracks, mbGroupTracks, type SourceTrack, appleSearchArtists, deezerAlbumLabel, mbGroupLabels, soundcloudSearch, ARTIST_OK, artistMatch, bestMatch, caaCover, deezerAlbum, deezerArtist, deezerSearchAlbums,
   fuzzy, fuzzyArtist, geniusSearch, geniusSong, mbLinks, mbSearchArtists, mbSearchGroups, mbSearchGroupsLoose, TITLE_OK,
   titleScore, wikiSearch, wikiSummary, wikidataToWikipedia,
 } from './sources';
@@ -58,6 +58,7 @@ export async function autoLinkRelease(rel: Release, artistName: string, opts: { 
     const p = pages?.find((x) => titleScore(x.title.replace(/\s*\(.*\)$/, ''), rel.title) >= 0.99 && /(album|mixtape|ep\b|extended play)/i.test(x.description) && (x.description.toLowerCase().includes(norm(artistName).split(' ')[0]) || /\(.*album\)/i.test(x.title)));
     if (p) { links = mergeLinks(links, { wikipedia: p.url }); found.push('Wikipedia'); }
   }
+  if (!artwork && links.wikipedia) { const c = await safe(wikiCover(links.wikipedia), errors, 'Wikipedia cover'); if (c) { artwork = c; found.push('Wikipedia cover'); } }
   ext.linked_at = now();
   const year = date ? Number(date.slice(0, 4)) : rel.year;
   return { patch: { links, ext, artwork_url: artwork, date, year, updated_at: now() }, found, errors };
@@ -158,6 +159,8 @@ export async function secondPassRelease(rel: Release, artistName: string): Promi
       }
     }
   }
+  // 5. Last resort: the cover in the album's Wikipedia infobox
+  if (!artwork && links.wikipedia) { const c = await safe(wikiCover(links.wikipedia), errors, 'Wikipedia'); if (c) { artwork = c; found.push('Wikipedia cover'); } }
   ext.pass2_at = now();
   const year = date ? Number(date.slice(0, 4)) : rel.year;
   return { patch: { links, ext, artwork_url: artwork, date, year, updated_at: now() }, found, errors };
@@ -197,13 +200,18 @@ export async function soundcloudPassRelease(rel: Release, artistName: string): P
 }
 
 /** Tracklist from Apple (gives playable song links), else Deezer, else MusicBrainz. */
-export async function findTracklist(rel: Release): Promise<{ tracks: SourceTrack[]; source: string | null; errors: string[] }> {
-  const errors: string[] = [];
+/** Where a tracklist can come from for this release, in order of preference. */
+export function tracklistSources(rel: Release): [string, () => Promise<SourceTrack[]>][] {
   const tries: [string, () => Promise<SourceTrack[]>][] = [];
   if (rel.ext.apple_id) tries.push(['Apple Music', async () => (await appleAlbumTracks(rel.ext.apple_id as number)).map((t) => ({ title: t.title, artist: t.artist, number: t.number, disc: t.disc, ms: t.ms, links: t.url ? { apple: t.url } : {}, ext: { apple_id: t.id } }))]);
   if (rel.ext.deezer_id) tries.push(['Deezer', () => deezerAlbumTracks(rel.ext.deezer_id as number)]);
   if (rel.ext.mbid) tries.push(['MusicBrainz', () => mbGroupTracks(rel.ext.mbid as string)]);
-  for (const [source, fn] of tries) {
+  if (rel.links.wikipedia) tries.push(['Wikipedia', () => wikiTracks(rel.links.wikipedia!)]);
+  return tries;
+}
+export async function findTracklist(rel: Release): Promise<{ tracks: SourceTrack[]; source: string | null; errors: string[] }> {
+  const errors: string[] = [];
+  for (const [source, fn] of tracklistSources(rel)) {
     const tracks = await safe(fn(), errors, source);
     if (tracks?.length) return { tracks, source, errors };
   }

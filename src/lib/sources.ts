@@ -391,7 +391,7 @@ export async function mbGroupLabels(mbid: string): Promise<string[]> {
 }
 
 // ——— Tracklists ———
-export interface SourceTrack { title: string; artist?: string; number: number | null; disc: number | null; ms: number | null; links: Links; ext: Record<string, unknown> }
+export interface SourceTrack { title: string; artist?: string; number: number | null; disc: number | null; ms: number | null; links: Links; ext: Record<string, unknown>; producers?: string[] }
 export async function deezerAlbumTracks(id: number): Promise<SourceTrack[]> {
   const r = await call<{ data?: { id: number; title: string; duration?: number; track_position?: number; disk_number?: number; link?: string; artist?: { name: string } }[] }>('deezer', `album/${id}/tracks`, { limit: 300 });
   return (r.data ?? []).map((t, i) => ({ title: t.title, artist: t.artist?.name, number: t.track_position ?? i + 1, disc: t.disk_number ?? null, ms: t.duration ? t.duration * 1000 : null, links: t.link ? { deezer: t.link } : {}, ext: { deezer_id: t.id } }));
@@ -475,4 +475,123 @@ export function youtubeEmbed(url?: string | null): string | null {
 export function appleEmbed(url?: string | null): string | null {
   if (!url || !/music\.apple\.com|itunes\.apple\.com/.test(url)) return null;
   return url.replace(/^https:\/\/(music|itunes)\.apple\.com/, 'https://embed.music.apple.com');
+}
+
+
+// ——— Wikipedia album pages: cover and tracklist ———
+export const wikiTitleFromUrl = (url?: string | null) => { const t = url?.split('/wiki/')[1]?.split(/[?#]/)[0]; return t ? decodeURIComponent(t).replace(/_/g, ' ') : undefined; };
+const wikitextCache = new Map<string, Promise<string>>();
+export const wikiWikitext = (title: string) => cached(wikitextCache, title, async () => {
+  const r = await call<{ parse?: { wikitext: string }; error?: { info: string } }>('wiki', 'w/api.php', { action: 'parse', page: title, prop: 'wikitext', redirects: 1, format: 'json', formatversion: 2 });
+  if (!r.parse) throw new Error(r.error?.info ?? 'Wikipedia page not found');
+  return r.parse.wikitext;
+});
+/** Split template parameters on top-level pipes (not those inside nested {{ }} or [[ ]]). */
+function splitParams(body: string): string[] {
+  const out: string[] = []; let depth = 0; let cur = '';
+  for (let i = 0; i < body.length; i++) {
+    const two = body.slice(i, i + 2);
+    if (two === '{{' || two === '[[') { depth++; cur += two; i++; continue; }
+    if ((two === '}}' || two === ']]') && depth > 0) { depth--; cur += two; i++; continue; }
+    if (body[i] === '|' && depth === 0) { out.push(cur); cur = ''; continue; }
+    cur += body[i];
+  }
+  out.push(cur); return out;
+}
+/** Every {{name …}} template in the text, with its parameters. */
+function templates(wt: string, name: RegExp): Record<string, string>[] {
+  const out: Record<string, string>[] = [];
+  const re = new RegExp(`\\{\\{\\s*(?:${name.source})\\s*[|}\\n]`, 'gi'); let m: RegExpExecArray | null;
+  while ((m = re.exec(wt))) {
+    let depth = 0; let end = m.index;
+    for (let i = m.index; i < wt.length - 1; i++) {
+      if (wt.startsWith('{{', i)) { depth++; i++; } else if (wt.startsWith('}}', i)) { depth--; i++; if (!depth) { end = i + 1; break; } }
+    }
+    const params: Record<string, string> = {};
+    for (const part of splitParams(wt.slice(m.index + 2, end - 2)).slice(1)) { const eq = part.indexOf('='); if (eq > 0) params[part.slice(0, eq).trim().toLowerCase()] = part.slice(eq + 1).trim(); }
+    out.push(params); re.lastIndex = end;
+  }
+  return out;
+}
+/** Wikitext → plain text: links to their text, lists to "a, b", references and formatting dropped. */
+const LIST_T = /\{\{\s*(?:hlist|flat ?list|unbulleted list|plain ?list|ubl|bulleted list)\s*\|([^{}]*)\}\}/gi;
+/** Items of a list template or bullet list, one per entry (pipes inside [[links]] left alone). */
+function listItems(s: string): string[] {
+  const safe = s.replace(/\[\[[^\]]*\]\]/g, (m) => m.replace(/\|/g, '\uE000'));
+  const flat = safe.replace(LIST_T, (_, x: string) => x.split('|').filter((v) => !/^\s*\w+\s*=/.test(v)).join('\n* '));
+  return flat.split(/\n\s*\*|<br\s*\/?>|,|\s+and\s+|\s*&\s*|\|/i).map((x) => x.replace(/\uE000/g, '|').trim()).filter(Boolean);
+}
+/** Drop references, comments and footnote-style templates; keep the text of nowrap/lang wrappers; list templates stay. */
+function stripNoise(s: string): string {
+  let t = s.replace(/<ref[^>]*\/>/gi, '').replace(/<ref[\s\S]*?<\/ref>/gi, '').replace(/<!--[\s\S]*?-->/g, '');
+  for (let prev = ''; prev !== t;) {
+    prev = t;
+    t = t.replace(/\{\{\s*(?:nowrap|nobr|lang\|[a-z-]+)\s*\|([^{}]*)\}\}/gi, '$1')
+      .replace(/\{\{\s*(?!hlist|flat ?list|unbulleted list|plain ?list|ubl\b|bulleted list)[^{}]*\}\}/gi, '');
+  }
+  return t;
+}
+export function wikiPlain(s: string): string {
+  return stripNoise(s)
+    .replace(/\{\{\s*(?:hlist|flat ?list|unbulleted list|plain ?list|ubl|bulleted list)\s*\|([^{}]*)\}\}/gi, (m) => listItems(m).map((x) => x.replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1')).join(', '))
+    .replace(/\{\{\s*(?:nowrap|nobr|small|lang\|[a-z-]+)\s*\|([^{}]*)\}\}/gi, '$1')
+    .replace(/\{\{[^{}]*\}\}/g, '').replace(/\[\[(?:[^\]|]*\|)?([^\]]*)\]\]/g, '$1')
+    .replace(/'{2,}/g, '').replace(/<br\s*\/?>/gi, ', ').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim();
+}
+const toMs = (s?: string) => { const m = s?.match(/(\d+):(\d{2})(?::(\d{2}))?/); if (!m) return null; return m[3] ? ((+m[1] * 60 + +m[2]) * 60 + +m[3]) * 1000 : (+m[1] * 60 + +m[2]) * 1000; };
+/** Producer names from a tracklist cell, with surnames ("Kilhoffer") expanded from links elsewhere on the page. */
+function producerNames(cell: string, fullNames: Map<string, string>): string[] {
+  return listItems(stripNoise(cell)).map((p) => {
+    const link = p.match(/\[\[\s*([^\]|]+?)\s*(?:\|\s*([^\]]+?)\s*)?\]\]/);
+    let name = link ? (link[2] ?? link[1]) : wikiPlain(p);
+    name = name.replace(/\([^)]*\)/g, '').replace(/[*^†‡#§¤¶%]+/g, '').replace(/^\s*(?:co|add|additional|misc)\.?\s+/i, '').trim();
+    if (link && /\(record producer\)|\(producer\)|\(musician\)|\(rapper\)/i.test(link[1]) && !link[2]) name = link[1].replace(/\s*\([^)]*\)/, '');
+    return fullNames.get(name.toLowerCase()) ?? name;
+  }).filter((n) => n && n.length > 1 && !/^(uncredited|none|n\/a)$/i.test(n));
+}
+/** Tracklist from the album's Wikipedia page ({{Track listing}} templates). Bonus/deluxe sections are left out. */
+export async function wikiTracks(url: string): Promise<SourceTrack[]> {
+  const title = wikiTitleFromUrl(url); if (!title) return [];
+  const wt = (await wikiWikitext(title)).replace(/<!--[\s\S]*?-->/g, '');
+  const blocks = templates(wt, /track ?listing|tracklist/);
+  const kind = (h: string) => (/\b(disc|cd)\b/i.test(h) ? 'disc' : /\bside\b/i.test(h) ? 'side' : /\bpart\b/i.test(h) ? 'part' : '');
+  const firstKind = kind(wikiPlain(blocks[0]?.headline ?? ''));
+  // Surname → full name, from every link on the page ([[Anthony Kilhoffer]] makes "Kilhoffer" usable)
+  const fullNames = new Map<string, string>();
+  for (const m of wt.matchAll(/\[\[([^\]|#]+)(?:\|[^\]]*)?\]\]/g)) {
+    if (m[1].includes(':')) continue; // Category:, File: …
+    const full = m[1].replace(/\s*\([^)]*\)/, '').trim(); const last = full.split(' ').pop()!;
+    if (full.includes(' ') && !fullNames.has(last.toLowerCase())) fullNames.set(last.toLowerCase(), full);
+  }
+  const out: SourceTrack[] = []; let disc = 0; let pos = 0;
+  for (const [i, b] of blocks.entries()) {
+    const head = wikiPlain(b.headline ?? '');
+    // Later blocks count only when the album is split the same way (Disc one → Disc two, Side A → Side B); others are other editions
+    if (i > 0 && (!firstKind || kind(head) !== firstKind)) continue;
+    if (i > 0 && /bonus|deluxe|edition|reissue|anniversary|expanded|japan|itunes|target|instrumental|remix/i.test(head)) continue;
+    // "Side one / Side two" is one album split across sides; "Disc two" starts a new disc
+    if (i === 0 || /\b(disc|cd)\b/i.test(head)) { disc++; pos = 0; }
+    const prodCol = /produc/i.test(b.extra_column ?? '');
+    const nums = Object.keys(b).map((k) => k.match(/^title(\d+)$/)?.[1]).filter(Boolean).map(Number).sort((x, y) => x - y);
+    for (const n of nums) {
+      pos++;
+      const note = wikiPlain(b[`note${n}`] ?? ''); const feat = note.match(/^(?:featuring|feat\.?|with)\s+(.+)$/i)?.[1];
+      let t = wikiPlain(b[`title${n}`]).replace(/^"|"$/g, '');
+      if (feat && !/feat/i.test(t)) t += ` (feat. ${feat.replace(/\s+and\s+/g, ' & ')})`;
+      out.push({ title: t, number: pos, disc: disc > 1 ? disc : null, ms: toMs(b[`length${n}`]), links: {}, ext: { wiki: true }, producers: prodCol && b[`extra${n}`] ? producerNames(b[`extra${n}`], fullNames) : undefined });
+    }
+  }
+  if (disc > 1) for (const t of out) t.disc ??= 1;
+  return out;
+}
+/** The album cover named in the page's infobox. */
+export async function wikiCover(url: string): Promise<string | undefined> {
+  const title = wikiTitleFromUrl(url); if (!title) return undefined;
+  const wt = await wikiWikitext(title);
+  const box = templates(wt, /infobox album|infobox mixtape|infobox ep|infobox single/)[0];
+  const file = (box?.cover ?? '').replace(/^\[\[(?:File|Image):/i, '').replace(/\|.*$/s, '').replace(/\]\]$/, '').trim();
+  if (!file) return undefined;
+  const r = await call<{ query?: { pages: Record<string, { imageinfo?: { url: string }[] }> } }>('wiki', 'w/api.php', { action: 'query', titles: `File:${file}`, prop: 'imageinfo', iiprop: 'url', format: 'json' });
+  const u = Object.values(r.query?.pages ?? {})[0]?.imageinfo?.[0]?.url;
+  return u?.split('?')[0];
 }
