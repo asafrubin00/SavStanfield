@@ -1,14 +1,21 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { AddToList, AnnotationPanel, Cover, fmtDate, LinkBar, LinksEditor, Modal, QuickRate, ReleaseTile } from '../components/ui';
+import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, LinkBar, LinksEditor, Modal, QuickRate, ReleaseTile } from '../components/ui';
 import { autoLinkArtist } from '../lib/enrich';
 import { parseArtistCredit } from '../lib/importSheet';
 import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists, type AppleAlbum, type MBGroup } from '../lib/sources';
 import { artistLabels, norm, trackArtists, useStore } from '../lib/store';
 import { SortSelect, usePref } from '../components/controls';
-import { RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
+import { type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
 import { linkQueue } from '../lib/queue';
+
+/** Artist page sections, in order. Types not listed under SHOWN or HIDDEN go in "Other". */
+const SHOWN: [string, string[]][] = [
+  ['Albums', ['Album']], ['Collaborations', ['Collaboration']], ['Deluxe editions', ['Deluxe']], ['Mixtapes', ['Mixtape']],
+  ['EPs', ['EP']], ['Compilations', ['Compilation', 'Greatest Hits']], ['Soundtracks', ['Soundtrack']],
+];
+const HIDDEN: [string, string[]][] = [['Singles', ['Single']], ['Leaks', ['Leak', 'Leak Compilation', 'Unreleased Album']], ['Appearances', ['Guest Appearance']]];
 
 export default function ArtistPage() {
   const { id } = useParams();
@@ -21,6 +28,7 @@ export default function ArtistPage() {
   const [editing, setEditing] = useState(false);
   const [disco, setDisco] = useState(false);
   const [featBusy, setFeatBusy] = useState(false);
+  const [moreOpen, setMoreOpen] = usePref('artist.moreOpen', false);
   const [merging, setMerging] = useState(false);
   const [bioOpen, setBioOpen] = useState(false);
   const [discSort, setDiscSort] = usePref('artist.discSort', 'newest');
@@ -54,11 +62,17 @@ export default function ArtistPage() {
     rating: (x, y) => rt(y) - rt(x) || day(y).localeCompare(day(x)), title: (x, y) => x.title.localeCompare(y.title),
   };
   const sorted = [...discog].sort(sorter[discSort] ?? sorter.newest);
+  // Main sections in a fixed order; singles, leaks and guest appearances sit behind a reveal
+  const sectionOf = (t: string) => SHOWN.find(([, ts]) => ts.includes(t))?.[0] ?? (HIDDEN.flatMap(([, ts]) => ts).includes(t) ? null : 'Other');
   const byType = new Map<string, Release[]>();
-  if (grouped) for (const r of sorted) (byType.get(r.type) ?? byType.set(r.type, []).get(r.type)!).push(r);
-  else if (sorted.length) byType.set('All releases', sorted);
+  for (const r of sorted) {
+    const sec = sectionOf(r.type); if (!sec) continue;
+    const k = grouped ? sec : 'All releases';
+    (byType.get(k) ?? byType.set(k, []).get(k)!).push(r);
+  }
+  const hiddenRel = (types: string[]) => sorted.filter((r) => types.includes(r.type));
   const labelsHere = artistLabels(ix, a.id);
-  const typeOrder = grouped ? [...RELEASE_TYPES, ...[...byType.keys()].filter((t) => !RELEASE_TYPES.includes(t))].filter((t) => byType.has(t)) : [...byType.keys()];
+  const typeOrder = grouped ? [...SHOWN.map(([n]) => n), 'Other'].filter((t) => byType.has(t)) : [...byType.keys()];
   const rated = discog.map((r) => ix.ann.get(`release:${r.id}`)?.rating).filter(Boolean) as number[];
   const avg = rated.length ? rated.reduce((s, x) => s + x, 0) / rated.length : null;
   const concerts = data.concerts.filter((c) => c.artist_id === a.id);
@@ -116,7 +130,7 @@ export default function ArtistPage() {
           {!discog.length && <div className="empty">No releases yet. <br /><button className="btn" onClick={() => setDisco(true)}>Import discography</button></div>}
           {typeOrder.map((t) => (
             <section key={t}>
-              <h2 className="h-sec">{t === 'Album' ? 'Albums' : t === 'Mixtape' ? 'Mixtapes' : t === 'EP' ? 'EPs' : t === 'Single' ? 'Singles' : t} {showCounts && <span className="muted">{byType.get(t)!.length}</span>}</h2>
+              <h2 className="h-sec">{t} {showCounts && <span className="muted">{byType.get(t)!.length}</span>}</h2>
               <div className="grid tight">{byType.get(t)!.map((r) => <ReleaseTile key={r.id} r={r} showArtist={r.artist_credit !== a.name} />)}</div>
             </section>
           ))}
@@ -127,13 +141,30 @@ export default function ArtistPage() {
                 <td><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link><div className="small muted">{r.artist_credit} · {r.year}</div></td>
                 <td className="small">{exec && <div>Executive producer</div>}{tracks.map((t, i) => <span key={t.id}>{i ? ', ' : ''}<Link to={`/track/${t.id}`}>{t.title}</Link></span>)}</td></tr>))}</tbody></table></div>
           </section>}
-          {appearances.length > 0 && <section>
-            <h2 className="h-sec">Appearances <span className="muted">{appearances.length}</span></h2>
-            <div className="table-wrap"><table className="table"><tbody>{appearances.map(({ r, tracks }) => (
-              <tr key={r?.id ?? tracks[0].id}><td className="thumb"><Cover src={r?.artwork_url} title={r?.title ?? tracks[0].title} size={36} /></td>
-                <td>{tracks.map((t, i) => <span key={t.id}>{i ? ', ' : ''}<Link to={`/track/${t.id}`} style={{ fontWeight: 600 }}>{t.title}</Link><button className="btn sm ghost" style={{ padding: '0 4px' }} title={`Not ${a.name} — remove this appearance`} aria-label={`Remove ${a.name} from ${t.title}`} onClick={() => void st.setTrackCredits(t.id, 'featured', trackArtists(ix, t.id, 'featured').filter((x) => x.id !== a.id).map((x) => x.name))}>×</button></span>)}
-                  {r && <div className="small muted">on <Link to={`/release/${r.id}`}>{r.title}</Link> · {r.artist_credit} · {r.year}</div>}</td></tr>))}</tbody></table></div>
-          </section>}
+          {(() => {
+            const singles = hiddenRel(HIDDEN[0][1]); const leaks = hiddenRel(HIDDEN[1][1]); const guest = hiddenRel(HIDDEN[2][1]);
+            const n = singles.length + leaks.length + guest.length + appearances.length;
+            if (!n) return null;
+            const relRows = (rs: Release[]) => rs.map((r) => (
+              <tr key={r.id}><td className="thumb"><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></td>
+                <td><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link><div className="small muted">{r.artist_credit !== a.name && <><Credits release={r} /> · </>}{r.date ? fmtDate(r.date) : r.year}</div></td>
+                <td style={{ textAlign: 'right' }}><QuickRate type="release" id={r.id} /></td></tr>));
+            const what = [singles.length && 'singles', leaks.length && 'leaks', (guest.length || appearances.length) && 'appearances'].filter(Boolean) as string[];
+            return <section>
+              <button className="btn" style={{ marginTop: 28 }} aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}>{moreOpen ? 'Hide' : 'Show'} {what.join(', ').replace(/, ([^,]*)$/, ' and $1')} ({n})</button>
+              {moreOpen && <>
+                {singles.length > 0 && <><h2 className="h-sec">Singles <span className="muted">{singles.length}</span></h2><div className="table-wrap"><table className="table"><tbody>{relRows(singles)}</tbody></table></div></>}
+                {leaks.length > 0 && <><h2 className="h-sec">Leaks <span className="muted">{leaks.length}</span></h2><div className="table-wrap"><table className="table"><tbody>{relRows(leaks)}</tbody></table></div></>}
+                {(guest.length > 0 || appearances.length > 0) && <>
+                  <h2 className="h-sec">Appearances <span className="muted">{guest.length + appearances.length}</span></h2>
+                  <div className="table-wrap"><table className="table"><tbody>{relRows(guest)}{appearances.map(({ r, tracks }) => (
+                    <tr key={r?.id ?? tracks[0].id}><td className="thumb"><Cover src={r?.artwork_url} title={r?.title ?? tracks[0].title} size={36} /></td>
+                      <td>{tracks.map((t, i) => <span key={t.id}>{i ? ', ' : ''}<Link to={`/track/${t.id}`} style={{ fontWeight: 600 }}>{t.title}</Link><button className="btn sm ghost" style={{ padding: '0 4px' }} title={`Not ${a.name} — remove this appearance`} aria-label={`Remove ${a.name} from ${t.title}`} onClick={() => void st.setTrackCredits(t.id, 'featured', trackArtists(ix, t.id, 'featured').filter((x) => x.id !== a.id).map((x) => x.name))}>×</button></span>)}
+                        {r && <div className="small muted">on <Link to={`/release/${r.id}`}>{r.title}</Link> · <Credits release={r} /> · {r.year}</div>}</td><td /></tr>))}</tbody></table></div>
+                </>}
+              </>}
+            </section>;
+          })()}
           {concerts.length > 0 && <section>
             <h2 className="h-sec">Seen live</h2>
             {concerts.map((c) => <div key={c.id} className="row" style={{ padding: '4px 0' }}><span className="num muted">{fmtDate(c.date)}</span><strong>{c.tour}</strong><span className="muted">{c.venue}, {c.location}</span></div>)}
