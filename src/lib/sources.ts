@@ -517,9 +517,12 @@ function templates(wt: string, name: RegExp): Record<string, string>[] {
 const LIST_T = /\{\{\s*(?:hlist|flat ?list|unbulleted list|plain ?list|ubl|bulleted list)\s*\|([^{}]*)\}\}/gi;
 /** Items of a list template or bullet list, one per entry (pipes inside [[links]] left alone). */
 function listItems(s: string): string[] {
-  const safe = s.replace(/\[\[[^\]]*\]\]/g, (m) => m.replace(/\|/g, '\uE000'));
+  // Links are set aside whole so "[[Cool & Dre]]" or "[[A, B|C]]" never get split
+  const links: string[] = [];
+  const safe = s.replace(/\[\[[^\]]*\]\]/g, (m) => `\uE000${links.push(m) - 1}\uE001`);
   const flat = safe.replace(LIST_T, (_, x: string) => x.split('|').filter((v) => !/^\s*\w+\s*=/.test(v)).join('\n* '));
-  return flat.split(/\n\s*\*|<br\s*\/?>|,|\s+and\s+|\s*&\s*|\|/i).map((x) => x.replace(/\uE000/g, '|').trim()).filter(Boolean);
+  // "&" and "and" aren't separators: duos like Cool & Dre are one name
+  return flat.split(/\n\s*\*|<br\s*\/?>|,|\|/i).map((x) => x.replace(/\uE000(\d+)\uE001/g, (_, i: string) => links[Number(i)]).trim()).filter(Boolean);
 }
 /** Drop references, comments and footnote-style templates; keep the text of nowrap/lang wrappers; list templates stay. */
 function stripNoise(s: string): string {

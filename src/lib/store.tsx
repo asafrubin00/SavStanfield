@@ -84,6 +84,10 @@ interface Store {
   replaceTracklist(release: Release, from?: { source: string; tracks: SourceTrack[] }): Promise<{ added: number; kept: number; source: string | null; producers: number }>;
   /** Re-read labels from the release's current sources and replace the ones found automatically. */
   refreshLabels(release: Release): Promise<string[]>;
+  /** Set a song's producers or featured artists to exactly these names (in order). Artists left with nothing are removed. */
+  setTrackCredits(trackId: string, role: 'producer' | 'featured', names: string[], opts?: { prune?: boolean }): Promise<string[]>;
+  /** Delete these artists if nothing (credits, ratings, notes, lists, labels) refers to them any more. */
+  pruneArtists(ids: string[], removedCredits?: Set<string>): Promise<number>;
   addTracksToList(listId: string, trackIds: string[]): Promise<number>;
 }
 
@@ -309,6 +313,32 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return { added: fresh.length, kept: keep.length, source: res.source, producers };
   }, [mergeLocal, upsert, ensureArtist, creditArtist]);
 
+  const pruneArtists = useCallback(async (ids: string[], removedCredits: Set<string> = new Set()) => {
+    await new Promise((r) => setTimeout(r, 50)); // let the latest saves reach the in-memory data
+    const d = dataRef.current; let n = 0;
+    for (const id of new Set(ids)) {
+      const used = d.credits.some((c) => c.artist_id === id && !removedCredits.has(c.id)) || ixRef.current.ann.has(annId('artist', id))
+        || d.list_items.some((i) => i.entity_id === id) || d.artist_labels.some((x) => x.artist_id === id);
+      if (!used && ixRef.current.artists.has(id)) { await deleteArtist(id); n++; }
+    }
+    return n;
+  }, [deleteArtist]);
+
+  const setTrackCredits = useCallback(async (trackId: string, role: 'producer' | 'featured', names: string[], opts: { prune?: boolean } = {}) => {
+    const cur = (ixRef.current.creditsByTrack.get(trackId) ?? []).filter((c) => c.role === role);
+    const want = [...new Map(names.map((n) => n.trim()).filter(Boolean).map((n) => [norm(n), n])).values()];
+    const ids = want.map((n) => ensureArtist(n, role === 'producer' ? { is_producer: true } : {}).artist.id);
+    const drop = cur.filter((c) => !ids.includes(c.artist_id));
+    if (drop.length) await remove('credits', drop.map((c) => c.id));
+    const rows: Credit[] = ids.map((artist_id, position) => ({ ...(cur.find((c) => c.artist_id === artist_id) ?? { id: uid(), artist_id, release_id: null, track_id: trackId, role }), position }));
+    await upsert('credits', rows);
+    if (role === 'producer') for (const id of ids) { const a = ixRef.current.artists.get(id); if (a && !a.is_producer) await upsert('artists', [{ ...a, is_producer: true, updated_at: now() }]); }
+    // Tidy up: an artist with nothing else pointing at them only existed because of the removed credit
+    const gone = drop.map((c) => c.artist_id).filter((id) => !ids.includes(id));
+    if (opts.prune !== false && gone.length) await pruneArtists(gone, new Set(drop.map((c) => c.id)));
+    return gone;
+  }, [ensureArtist, remove, upsert, pruneArtists]);
+
   const refreshLabels = useCallback(async (release: Release) => {
     const res = await findReleaseLabels(release);
     if (res.names.length) await setReleaseLabels(release.id, res.names);
@@ -332,7 +362,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return add.length;
   }, [upsert, say]);
 
-  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList, replaceTracklist, refreshLabels };
+  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList, replaceTracklist, refreshLabels, setTrackCredits, pruneArtists };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

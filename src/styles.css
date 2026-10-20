@@ -190,3 +190,17 @@ details summary { cursor: pointer; }
 .player-embed { min-width: 0; }
 @media (max-width: 820px) { .player { left: 0; grid-template-columns: 1fr; padding: 8px 12px; gap: 8px; } }
 .tracklist li.playing { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+/* Name tags with an add box (producers, featured artists) */
+.people-input { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 4px 6px; min-height: 34px; }
+.people-input:focus-within { border-color: var(--accent); }
+.people-input .chip { cursor: default; padding: 2px 4px 2px 9px; }
+.people-input .chip button { border: 0; background: none; color: var(--muted); cursor: pointer; font-size: 15px; line-height: 1; padding: 0 3px; }
+.people-input .chip button:hover { color: var(--danger); }
+.people-input input { flex: 1; min-width: 90px; border: 0; background: transparent; color: inherit; padding: 3px 2px; outline: none; font: inherit; }
+.tracklist-edit { display: grid; gap: 10px; }
+.tracklist-edit .te-row { display: grid; grid-template-columns: 52px 1fr auto; gap: 8px; align-items: start; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.tracklist-edit .te-row.deleted { opacity: .45; }
+.tracklist-edit .te-fields { display: grid; gap: 6px; min-width: 0; }
+.tracklist-edit .te-two { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+@media (max-width: 720px) { .tracklist-edit .te-two { grid-template-columns: 1fr; } }

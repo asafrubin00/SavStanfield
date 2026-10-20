@@ -6,6 +6,7 @@ import { AddToList, AnnotationPanel, Cover, fmtMs, LinkBar, LinksEditor, Modal, 
 import { mergeLinks } from '../lib/links';
 import { artistMatch, geniusSearch, geniusSong, soundcloudEmbed, titleScore, youtubeEmbed } from '../lib/sources';
 import { releaseArtists, trackArtists, useStore } from '../lib/store';
+import PeopleInput from '../components/PeopleInput';
 import type { Track } from '../lib/types';
 import { now } from '../lib/util';
 
@@ -74,13 +75,23 @@ export default function TrackPage() {
 }
 
 function TrackForm({ track, onClose }: { track: Track; onClose: () => void }) {
-  const { upsert } = useStore();
+  const st = useStore(); const { upsert, ix } = st;
   const [f, setF] = useState({ title: track.title, artist_credit: track.artist_credit ?? '', number: String(track.number ?? ''), disc: String(track.disc ?? '') });
+  const [prods, setProds] = useState(() => trackArtists(ix, track.id, 'producer').map((a) => a.name));
+  const [feats, setFeats] = useState(() => trackArtists(ix, track.id, 'featured').map((a) => a.name));
   return (
     <Modal title="Edit song" onClose={onClose}>
-      <form className="form-grid" onSubmit={async (e) => { e.preventDefault(); await upsert('tracks', [{ ...track, title: f.title.trim() || track.title, artist_credit: f.artist_credit || null, number: Number(f.number) || null, disc: Number(f.disc) || null, updated_at: now() }]); onClose(); }}>
+      <form className="form-grid" onSubmit={async (e) => {
+        e.preventDefault();
+        await upsert('tracks', [{ ...track, title: f.title.trim() || track.title, artist_credit: f.artist_credit || null, number: Number(f.number) || null, disc: Number(f.disc) || null, updated_at: now() }]);
+        const gone = [...await st.setTrackCredits(track.id, 'producer', prods, { prune: false }), ...await st.setTrackCredits(track.id, 'featured', feats, { prune: false })];
+        if (gone.length) await st.pruneArtists(gone);
+        onClose();
+      }}>
         <label className="full"><span className="label">Title</span><input className="input" style={{ width: '100%' }} value={f.title} onChange={(e) => setF({ ...f, title: e.target.value })} /></label>
         <label className="full"><span className="label">Artist (if different from the release)</span><input className="input" style={{ width: '100%' }} value={f.artist_credit} onChange={(e) => setF({ ...f, artist_credit: e.target.value })} /></label>
+        <div className="full"><span className="label">Featuring</span><PeopleInput value={feats} onChange={setFeats} placeholder="Add featured artist" /></div>
+        <div className="full"><span className="label">Producers</span><PeopleInput value={prods} onChange={setProds} placeholder="Add producer" producersFirst /></div>
         <label><span className="label">Track number</span><input className="input num" style={{ width: '100%' }} value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} /></label>
         <label><span className="label">Disc</span><input className="input num" style={{ width: '100%' }} value={f.disc} onChange={(e) => setF({ ...f, disc: e.target.value })} /></label>
         <div className="full row"><span className="spacer" /><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn primary">Save changes</button></div>

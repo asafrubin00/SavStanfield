@@ -10,8 +10,9 @@ import {
   appleCatalogueMatches, appleEmbed, appleFindAlbum, appleSearchAlbums, artistMatch, geniusSearch, geniusSong, mbLinks, mbSearchGroups,
   pickApple, wikiCover, type SourceTrack, soundcloudEmbed, soundcloudOembed, titleScore, wikiSearch, wikidataToWikipedia, youtubeEmbed, youtubeSearch, type AppleAlbum, type GeniusHit, type MBGroup,
 } from '../lib/sources';
-import { releaseArtists, releaseLabels, trackArtists, useStore } from '../lib/store';
-import { RELEASE_TYPES, type Artist, type Release } from '../lib/types';
+import { norm, releaseArtists, releaseLabels, trackArtists, useStore } from '../lib/store';
+import PeopleInput from '../components/PeopleInput';
+import { RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
 
 export default function ReleasePage() {
@@ -24,6 +25,7 @@ export default function ReleasePage() {
   const [editing, setEditing] = useState(false);
   const [matching, setMatching] = useState(false);
   const [choosing, setChoosing] = useState(false);
+  const [editTracks, setEditTracks] = useState(false);
   const [busy, setBusy] = useState('');
   const [embed, setEmbed] = useState<'apple' | 'youtube' | 'soundcloud' | null>(null);
   const [yt, setYt] = useState<Awaited<ReturnType<typeof youtubeSearch>> | null>(null);
@@ -181,8 +183,9 @@ export default function ReleasePage() {
             {tracks.length > 0 && <span className="row" style={{ marginLeft: 'auto', gap: 6, fontSize: 14, fontWeight: 400 }}>
               <button className="btn sm" onClick={() => player.play(tracks.map((x) => x.id), 0, r.title)}>Play album</button>
               <AddToPlaylist trackIds={tracks.map((x) => x.id)} label="Add album to playlist" />
+              {!editTracks && <button className="btn sm" onClick={() => setEditTracks(true)}>Edit tracklist</button>}
             </span>}</h2>
-          {!tracks.length ? <div className="empty">No tracks yet. “Get tracklist” pulls it from Apple Music.</div> : (
+          {editTracks ? <TracklistEditor release={r} tracks={tracks} onClose={() => setEditTracks(false)} /> : !tracks.length ? <div className="empty">No tracks yet. “Get tracklist” pulls it from Apple Music, Deezer, MusicBrainz or Wikipedia — or <button className="btn sm" onClick={() => setEditTracks(true)}>type it in</button></div> : (
             <ol className="tracklist">{tracks.map((t, i) => {
               const prods = trackArtists(ix, t.id, 'producer'); const feats = trackArtists(ix, t.id, 'featured');
               return (
@@ -310,6 +313,77 @@ export function ReleaseForm({ release, onClose, defaults }: { release?: Release;
  * Save new links and make everything follow them: the chosen source's ID and cover, then (if the source
  * changed) a fresh tracklist and labels from it.
  */
+/** Edit every song on the release at once: titles, numbers, featured artists, producers; add or remove songs. */
+type DraftRow = { id: string; isNew: boolean; deleted: boolean; number: string; disc: string; title: string; length: string; feats: string[]; prods: string[] };
+const parseLen = (s: string) => { const m = s.trim().match(/^(\d+):(\d{1,2})$/); return m ? (+m[1] * 60 + +m[2]) * 1000 : null; };
+function TracklistEditor({ release, tracks, onClose }: { release: Release; tracks: Track[]; onClose: () => void }) {
+  const st = useStore(); const { ix } = st;
+  const names = (id: string, role: 'producer' | 'featured') => trackArtists(ix, id, role).map((a) => a.name);
+  const initial = useMemo<DraftRow[]>(() => tracks.map((t) => ({ id: t.id, isNew: false, deleted: false, number: String(t.number ?? ''), disc: t.disc ? String(t.disc) : '', title: t.title, length: t.duration_ms ? fmtMs(t.duration_ms) : '', feats: names(t.id, 'featured'), prods: names(t.id, 'producer') })), []); // eslint-disable-line react-hooks/exhaustive-deps
+  const [rows, setRows] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const set = (i: number, patch: Partial<DraftRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => norm(x) === norm(b[i]));
+  async function save() {
+    const rated = rows.filter((r) => r.deleted && !r.isNew && (ix.ann.has(`track:${r.id}`) || st.data.list_items.some((i) => i.entity_id === r.id)));
+    if (rated.length && !confirm(`Delete ${rated.map((r) => `“${r.title}”`).join(', ')}? You've rated or listed ${rated.length > 1 ? 'them' : 'it'}.`)) return;
+    setSaving(true);
+    try {
+      const gone: string[] = [];
+      for (const [i, r] of rows.entries()) {
+        const before = initial.find((x) => x.id === r.id);
+        if (r.deleted) {
+          if (r.isNew) continue;
+          gone.push(...await st.setTrackCredits(r.id, 'producer', [], { prune: false }), ...await st.setTrackCredits(r.id, 'featured', [], { prune: false }));
+          await st.remove('credits', (ix.creditsByTrack.get(r.id) ?? []).map((c) => c.id));
+          await st.remove('tracks', [r.id]);
+          continue;
+        }
+        if (!r.title.trim()) continue;
+        const old = tracks.find((t) => t.id === r.id);
+        const fields = { title: r.title.trim(), number: Number(r.number) || (r.isNew ? i + 1 : null), disc: Number(r.disc) || null, duration_ms: parseLen(r.length) ?? (r.length.trim() ? old?.duration_ms ?? null : null) };
+        if (r.isNew) await st.upsert('tracks', [{ id: r.id, release_id: release.id, artist_credit: null, links: {}, ext: { manual: true }, created_at: now(), updated_at: now(), ...fields }]);
+        else if (old && (old.title !== fields.title || old.number !== fields.number || (old.disc ?? null) !== fields.disc || (old.duration_ms ?? null) !== fields.duration_ms)) await st.upsert('tracks', [{ ...old, ...fields, ext: { ...old.ext, edited: now() }, updated_at: now() }]);
+        if (!before || !same(before.prods, r.prods)) gone.push(...await st.setTrackCredits(r.id, 'producer', r.prods, { prune: false }));
+        if (!before || !same(before.feats, r.feats)) gone.push(...await st.setTrackCredits(r.id, 'featured', r.feats, { prune: false }));
+      }
+      const pruned = gone.length ? await st.pruneArtists(gone) : 0;
+      st.say(`Tracklist saved${pruned ? ` · removed ${pruned} unused artist${pruned > 1 ? 's' : ''}` : ''}`);
+      onClose();
+    } catch (e) { st.say((e as Error).message); } finally { setSaving(false); }
+  }
+  return (
+    <div className="tracklist-edit">
+      <div className="small muted">Type a name and press Enter to add it; × removes it. Lengths as m:ss.</div>
+      {rows.map((r, i) => (
+        <div key={r.id} className={`te-row${r.deleted ? ' deleted' : ''}`}>
+          <div className="te-fields">
+            <input className="input num" aria-label="Track number" value={r.number} onChange={(e) => set(i, { number: e.target.value })} placeholder="#" />
+            <input className="input num small" aria-label="Disc" value={r.disc} onChange={(e) => set(i, { disc: e.target.value })} placeholder="disc" />
+          </div>
+          <div className="te-fields">
+            <div className="row" style={{ flexWrap: 'nowrap', gap: 6 }}>
+              <input className="input" style={{ flex: 1 }} aria-label="Title" value={r.title} disabled={r.deleted} onChange={(e) => set(i, { title: e.target.value })} placeholder="Song title" />
+              <input className="input num" style={{ width: 70 }} aria-label="Length" value={r.length} disabled={r.deleted} onChange={(e) => set(i, { length: e.target.value })} placeholder="m:ss" />
+            </div>
+            {!r.deleted && <div className="te-two">
+              <div><span className="label">Featuring</span><PeopleInput value={r.feats} onChange={(v) => set(i, { feats: v })} placeholder="Add featured artist" /></div>
+              <div><span className="label">Producers</span><PeopleInput value={r.prods} onChange={(v) => set(i, { prods: v })} placeholder="Add producer" producersFirst /></div>
+            </div>}
+          </div>
+          <button type="button" className="btn sm ghost" onClick={() => (r.isNew ? setRows((rs) => rs.filter((_, j) => j !== i)) : set(i, { deleted: !r.deleted }))}>{r.deleted ? 'Undo' : 'Remove'}</button>
+        </div>
+      ))}
+      <div className="row">
+        <button type="button" className="btn" onClick={() => setRows((rs) => [...rs, { id: uid(), isNew: true, deleted: false, number: String(rs.filter((x) => !x.deleted).length + 1), disc: '', title: '', length: '', feats: [], prods: [] }])}>+ Add song</button>
+        <span className="spacer" />
+        <button type="button" className="btn" disabled={saving} onClick={onClose}>Cancel</button>
+        <button type="button" className="btn primary" disabled={saving} onClick={save}>{saving ? 'Saving…' : 'Save tracklist'}</button>
+      </div>
+    </div>
+  );
+}
+
 /** Pick the tracklist source: each linked source is fetched and shown with its track count first. */
 function TracklistChooser({ release, hasTracks, onClose, onAppleSearch }: { release: Release; hasTracks: boolean; onClose: () => void; onAppleSearch: () => void }) {
   const st = useStore();
