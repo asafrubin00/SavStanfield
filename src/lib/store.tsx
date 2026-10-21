@@ -79,7 +79,7 @@ interface Store {
   loadTracks(ids: string[]): Promise<void>;
   saveTracksQuiet(rows: Track[]): Promise<void>;
   searchTracks(q: string, limit?: number): Promise<Track[]>;
-  createList(name: string, kind: 'list' | 'playlist'): Promise<string>;
+  createList(name: string, kind: 'list' | 'playlist' | 'artists'): Promise<string>;
   /** Swap a release's tracklist for the one from its current sources. Songs you've rated, credited or put on a list are kept. */
   /** Replace the tracklist from the best source, or a chosen one (tracks already fetched can be passed in). */
   replaceTracklist(release: Release, from?: { source: string; tracks: SourceTrack[] }): Promise<{ added: number; kept: number; source: string | null; producers: number }>;
@@ -381,7 +381,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return res.names;
   }, [setReleaseLabels]);
 
-  const createList = useCallback(async (name: string, kind: 'list' | 'playlist') => {
+  const createList = useCallback(async (name: string, kind: 'list' | 'playlist' | 'artists') => {
     const id = uid();
     await upsert('lists', [{ id, name: name.trim(), ranked: false, kind, created_at: now(), updated_at: now() }]);
     return id;

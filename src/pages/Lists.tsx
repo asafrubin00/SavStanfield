@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { SortSelect, usePref } from '../components/controls';
 import { Cover, QuickRate } from '../components/ui';
@@ -17,8 +17,13 @@ function itemView(ix: Index, it: ListItem) {
 }
 
 export function Lists() {
-  const { data, ix, createList } = useStore();
+  const { data, ix, createList, upsert } = useStore();
   const nav = useNavigate();
+  // Lists that only hold artists become artist lists (e.g. XXL Freshmen from the spreadsheet)
+  useEffect(() => {
+    const convert = data.lists.filter((l) => (l.kind ?? 'list') === 'list' && (ix.itemsByList.get(l.id)?.length ?? 0) > 0 && ix.itemsByList.get(l.id)!.every((i) => i.entity_type === 'artist'));
+    if (convert.length) void upsert('lists', convert.map((l) => ({ ...l, kind: 'artists' as const, custom_order: true })));
+  }, [data.lists, ix, upsert]);
   const [name, setName] = useState('');
   const [show, setShow] = usePref('lists.show', 'all');
   const [sort, setSort] = usePref('lists.sort', 'updated');
@@ -28,12 +33,13 @@ export function Lists() {
   return (
     <div>
       <div className="row" style={{ marginBottom: 20 }}><h1 className="h-page">Lists</h1><span className="spacer" />
-        <div className="seg" role="group" aria-label="Show">{[['all', 'All'], ['list', 'Lists'], ['playlist', 'Playlists']].map(([v, t]) => <button key={v} className={show === v ? 'on' : ''} onClick={() => setShow(v)}>{t}</button>)}</div>
+        <div className="seg" role="group" aria-label="Show">{[['all', 'All'], ['list', 'Lists'], ['playlist', 'Playlists'], ['artists', 'Artists']].map(([v, t]) => <button key={v} className={show === v ? 'on' : ''} onClick={() => setShow(v)}>{t}</button>)}</div>
         <SortSelect value={sort} onChange={setSort} options={[['updated', 'Recently changed'], ['created', 'Newest'], ['az', 'A–Z'], ['size', 'Biggest']]} /></div>
       <form className="row" style={{ marginBottom: 24 }} onSubmit={(e) => e.preventDefault()}>
         <input className="input" style={{ width: 300 }} placeholder="Name, e.g. Best of 2026 or Late night drive" value={name} onChange={(e) => setName(e.target.value)} />
         <button className="btn primary" disabled={!name.trim()} onClick={async () => { const id = await createList(name, 'playlist'); setName(''); nav(`/list/${id}`); }}>Create playlist</button>
         <button className="btn" disabled={!name.trim()} onClick={async () => { const id = await createList(name, 'list'); setName(''); nav(`/list/${id}`); }}>Create list</button>
+        <button className="btn" disabled={!name.trim()} onClick={async () => { const id = await createList(name, 'artists'); setName(''); nav(`/list/${id}`); }}>Create artist list</button>
         <span className="small muted">Playlists are songs you can play in order. Lists can hold anything — albums, artists, songs.</span>
       </form>
       {!lists.length ? <div className="empty">No lists yet. Make one above, or use “Add to list” on any artist, release or song.</div> : (
@@ -42,7 +48,7 @@ export function Lists() {
           return (
             <Link key={l.id} to={`/list/${l.id}`} className="tile" style={{ textDecoration: 'none' }}>
               <ListCover list={l} items={items} />
-              <div className="t">{l.name}</div><div className="s">{l.kind === 'playlist' ? `Playlist · ${items.length} song${items.length === 1 ? '' : 's'}` : `${items.length} item${items.length === 1 ? '' : 's'}`}</div>
+              <div className="t">{l.name}</div><div className="s">{l.kind === 'playlist' ? `Playlist · ${items.length} song${items.length === 1 ? '' : 's'}` : l.kind === 'artists' ? `Artists · ${items.length}` : `${items.length} item${items.length === 1 ? '' : 's'}`}</div>
             </Link>);
         })}</div>
       )}
@@ -63,14 +69,16 @@ export default function ListPage() {
   const [itemSort, setItemSort] = useState('order');
   const [view, setView] = usePref(`list.view.${id}`, 'compact');
   const [picking, setPicking] = useState(false);
+  const isArt = l0?.kind === 'artists';
   const results = useMemo(() => {
     const n = norm(q); if (n.length < 2) return [];
+    if (isArt) return data.artists.filter((a) => norm(a.name).includes(n)).sort((a, b) => Number(norm(b.name).startsWith(n)) - Number(norm(a.name).startsWith(n)) || a.name.length - b.name.length).slice(0, 10).map((a) => ({ type: 'artist' as const, id: a.id, title: a.name, sub: ix.lastByArtist.get(a.id) ? `Latest release ${ix.lastByArtist.get(a.id)!.slice(0, 4)}` : 'Artist' }));
     return [
       ...data.artists.filter((a) => norm(a.name).includes(n)).slice(0, 4).map((a) => ({ type: 'artist' as const, id: a.id, title: a.name, sub: 'Artist' })),
       ...data.releases.filter((r) => norm(`${r.artist_credit} ${r.title}`).includes(n)).slice(0, 8).map((r) => ({ type: 'release' as const, id: r.id, title: r.title, sub: `${r.artist_credit} · ${r.year ?? ''}` })),
       ...data.tracks.filter((t) => norm(t.title).includes(n)).slice(0, 4).map((t) => ({ type: 'track' as const, id: t.id, title: t.title, sub: `Song · ${t.artist_credit ?? ''}` })),
     ];
-  }, [q, data]);
+  }, [q, data, isArt, ix]);
   if (!l) return <div className="empty">List not found. <Link to="/lists">All lists</Link></div>;
   if (l.kind === 'playlist') return <PlaylistView list={l} />;
 
@@ -80,7 +88,7 @@ export default function ListPage() {
   };
   const fn = norm(filter);
   const rel = (it: ListItem) => it.entity_type === 'release' ? ix.releases.get(it.entity_id!) : it.entity_type === 'track' ? ix.releases.get(ix.tracks.get(it.entity_id!)?.release_id ?? '') : undefined;
-  const day = (it: ListItem) => { const r = rel(it); return r?.date ?? (r?.year ? String(r.year) : ''); };
+  const day = (it: ListItem) => { if (it.entity_type === 'artist') return ix.lastByArtist.get(it.entity_id ?? '') ?? ''; const r = rel(it); return r?.date ?? (r?.year ? String(r.year) : ''); };
   const rt = (it: ListItem) => it.entity_id ? ix.ann.get(`${it.entity_type}:${it.entity_id}`)?.rating ?? 0 : 0;
   const ttl = (it: ListItem) => itemView(ix, it)?.title ?? '';
   const sorted = itemSort === 'order' ? items : [...items].sort(
@@ -94,7 +102,7 @@ export default function ListPage() {
       <div className="hero" style={{ gridTemplateColumns: 'minmax(120px, 180px) 1fr', alignItems: 'end' }}>
         <ListCover list={l} items={items} onClick={() => setPicking(true)} />
         <div>
-          <div className="muted" style={{ marginBottom: 6 }}>List</div>
+          <div className="muted" style={{ marginBottom: 6 }}>{isArt ? 'Artist list' : 'List'}</div>
           <input className="h-page" style={{ border: 0, background: 'transparent', width: '100%', padding: 0 }} value={l.name} aria-label="List name" onChange={(e) => upsert('lists', [{ ...l, name: e.target.value, updated_at: now() }])} />
           <input className="input" style={{ width: '100%', marginTop: 10, background: 'transparent' }} placeholder="Add a description" value={l.description ?? ''} onChange={(e) => upsert('lists', [{ ...l, description: e.target.value }])} />
         </div>
@@ -102,16 +110,18 @@ export default function ListPage() {
       {picking && <CoverPicker list={l} items={items} onClose={() => setPicking(false)} />}
       <div className="row" style={{ margin: '16px 0 22px' }}>
         <label className="row"><input type="checkbox" checked={l.ranked} onChange={(e) => upsert('lists', [{ ...l, ranked: e.target.checked }])} /> Ranked</label>
-        <SortSelect value={itemSort} onChange={setItemSort} options={[['order', l.ranked ? 'Ranking' : l.custom_order ? 'Your order' : 'Your order (newest first)'], ['rating', 'Your rating'], ['newest', 'Newest first'], ['oldest', 'Oldest first'], ['title', 'A–Z']]} />
-        <div className="seg" role="group" aria-label="View">{[['compact', 'List view'], ['covers', 'Album view']].map(([v, t]) => <button key={v} className={(view === 'covers') === (v === 'covers') ? 'on' : ''} onClick={() => setView(v)}>{t}</button>)}</div>
-        <span className="muted">{items.length} items</span>
+        <SortSelect value={itemSort} onChange={setItemSort} options={isArt
+          ? [['order', l.ranked ? 'Ranking' : l.custom_order ? 'Your order' : 'Your order (latest release first)'], ['rating', 'Your rating'], ['newest', 'Latest release'], ['title', 'A–Z']]
+          : [['order', l.ranked ? 'Ranking' : l.custom_order ? 'Your order' : 'Your order (newest first)'], ['rating', 'Your rating'], ['newest', 'Newest first'], ['oldest', 'Oldest first'], ['title', 'A–Z']]} />
+        <div className="seg" role="group" aria-label="View">{[['compact', 'List view'], ['covers', isArt ? 'Grid view' : 'Album view']].map(([v, t]) => <button key={v} className={(view === 'covers') === (v === 'covers') ? 'on' : ''} onClick={() => setView(v)}>{t}</button>)}</div>
+        <span className="muted">{items.length} {isArt ? (items.length === 1 ? 'artist' : 'artists') : 'items'}</span>
         {items.length > 12 && <input className="input" placeholder="Filter this list" value={filter} onChange={(e) => setFilter(e.target.value)} />}
         {!canMove && items.length > 1 && <span className="small muted">{filter ? 'Clear the filter' : `Switch to “${l.ranked ? 'Ranking' : 'Your order'}”`} to drag items around</span>}
         <span className="spacer" />
         <button className="btn danger" onClick={async () => { if (confirm(`Delete the list “${l.name}”? Nothing in your library is deleted.`)) { await remove('list_items', items.map((i) => i.id)); await remove('lists', [l.id]); nav('/lists'); } }}>Delete list</button>
       </div>
       <div className="search" style={{ maxWidth: 560, marginBottom: 20 }}>
-        <input className="input" placeholder="Add from your library — search artists, releases, songs" value={q} onChange={(e) => setQ(e.target.value)}
+        <input className="input" placeholder={isArt ? 'Add an artist — search your library' : 'Add from your library — search artists, releases, songs'} value={q} onChange={(e) => setQ(e.target.value)}
           onKeyDown={(e) => { if (e.key === 'Enter' && !results.length && q.trim()) void add('text', null, q.trim()); }} />
         {q.trim().length >= 2 && <div className="dropdown">
           {results.map((r) => <button key={r.type + r.id} className="dd-item btn ghost" style={{ width: '100%', justifyContent: 'flex-start', textAlign: 'left' }} onClick={() => add(r.type, r.id)}><span><strong>{r.title}</strong><div className="small muted">{r.sub}</div></span></button>)}

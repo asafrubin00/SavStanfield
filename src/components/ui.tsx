@@ -136,12 +136,12 @@ export function AddToList({ type, id }: { type: EntityType; id: string }) {
     <span className="row">
       <select className="select" autoFocus defaultValue="" onChange={async (e) => { if (e.target.value) { await addToList(e.target.value, type, id); setOpen(false); } }}>
         <option value="" disabled>Choose a list…</option>
-        {[...data.lists].sort((a, b) => a.name.localeCompare(b.name)).map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+        {[...data.lists].filter((l) => (type === 'artist' ? l.kind !== 'playlist' : l.kind !== 'artists')).sort((a, b) => a.name.localeCompare(b.name)).map((l) => <option key={l.id} value={l.id}>{l.name}{l.kind === 'artists' ? ' (artists)' : ''}</option>)}
       </select>
       <input className="input" placeholder="or new list name" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 160 }} />
       <button className="btn" disabled={!name.trim()} onClick={async () => {
         const id2 = crypto.randomUUID();
-        await upsert('lists', [{ id: id2, name: name.trim(), ranked: false, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }]);
+        await upsert('lists', [{ id: id2, name: name.trim(), ranked: false, kind: type === 'artist' ? 'artists' : 'list', created_at: new Date().toISOString(), updated_at: new Date().toISOString() }]);
         await addToList(id2, type, id); setOpen(false); setName('');
       }}>Create</button>
       <button className="btn ghost" onClick={() => setOpen(false)}>Cancel</button>

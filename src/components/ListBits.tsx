@@ -161,6 +161,7 @@ export function orderItems(ix: Index, list: List, items: ListItem[]): ListItem[]
   if (list.custom_order || list.ranked) return byPos;
   const day = (it: ListItem) => {
     const id = it.entity_id ?? '';
+    if (it.entity_type === 'artist') return ix.lastByArtist.get(id) ?? '';
     const r = it.entity_type === 'release' ? ix.releases.get(id) : it.entity_type === 'track' ? ix.releases.get(ix.tracks.get(id)?.release_id ?? '') : undefined;
     return r?.date ?? (r?.year ? String(r.year) : '');
   };
