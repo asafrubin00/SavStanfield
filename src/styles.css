@@ -229,3 +229,12 @@ details summary { cursor: pointer; }
 .tile-rate-inline { display: flex; align-items: center; gap: 4px; margin-top: 2px; }
 .tile-rate-inline .stars button { font-size: 15px; cursor: pointer; }
 .tile-rate-inline .fav { font-size: 16px; }
+
+/* Drag to reorder */
+.drag-handle { border: 0; background: none; color: var(--muted); cursor: grab; padding: 2px 4px; font-size: 14px; letter-spacing: -3px; line-height: 1; touch-action: none; border-radius: 4px; }
+.drag-handle:hover { color: var(--ink); background: var(--sunken); }
+.drag-handle:active { cursor: grabbing; }
+.tile-handle { position: absolute; top: 6px; right: 6px; z-index: 2; opacity: 0; transition: opacity .15s; }
+.tile-handle .drag-handle { background: rgba(0,0,0,.65); color: #fff; padding: 5px 7px; }
+.tile:hover .tile-handle, .tile-handle:focus-within { opacity: 1; }
+@media (hover: none) { .tile-handle { opacity: .9; } }

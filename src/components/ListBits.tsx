@@ -1,4 +1,7 @@
-import { useState, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
+import { closestCenter, DndContext, KeyboardSensor, PointerSensor, TouchSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { Link } from 'react-router-dom';
 import { player } from '../lib/player';
 import { missingColumns } from '../lib/db';
@@ -56,7 +59,7 @@ export function CoverPicker({ list, items, onClose }: { list: List; items: ListI
   return (
     <Modal title="Cover" onClose={onClose}>
       <div onPaste={(e) => { const f = [...e.clipboardData.items].find((i) => i.type.startsWith('image/'))?.getAsFile(); if (f) { e.preventDefault(); void fromFile(f); } }}>
-        {needsSql && <div className="panel" style={{ marginBottom: 12, borderColor: 'var(--accent)' }}>Custom covers need a one-time database update: run <code>supabase/004-list-covers.sql</code> in Supabase’s SQL Editor, then reload.</div>}
+        {needsSql && <div className="panel" style={{ marginBottom: 12, borderColor: 'var(--accent)' }}>Custom covers need a one-time database update: run <code>supabase/005-list-order.sql</code> in Supabase’s SQL Editor, then reload.</div>}
         <div className="row" style={{ marginBottom: 12 }}>
           <label className="btn primary">Upload an image<input type="file" accept="image/*" hidden onChange={(e) => void fromFile(e.target.files?.[0])} /></label>
           <span className="small muted">or paste an image here (⌘V)</span>
@@ -78,7 +81,7 @@ export function CoverPicker({ list, items, onClose }: { list: List; items: ListI
 }
 
 /** One tile in the covers view: an album (with the songs from it), an artist, a label or a text entry. */
-type Group = { key: string; rank?: number; release?: Release; trackIds: string[]; to?: string; title: string; sub: string; img?: string | null; round?: boolean; rate?: { type: 'release' | 'artist' | 'label' | 'track'; id: string } };
+type Group = { key: string; itemIds: string[]; rank?: number; release?: Release; trackIds: string[]; to?: string; title: string; sub: string; img?: string | null; round?: boolean; rate?: { type: 'release' | 'artist' | 'label' | 'track'; id: string } };
 
 /** Group list items into cover tiles, keeping the order they're given in. Songs from the same album share a tile. */
 export function groupForCovers(ix: Index, items: ListItem[], ranks?: Map<string, number>): Group[] {
@@ -90,23 +93,27 @@ export function groupForCovers(ix: Index, items: ListItem[], ranks?: Map<string,
       const t = it.entity_type === 'track' ? ix.tracks.get(id) : undefined;
       const r = it.entity_type === 'release' ? ix.releases.get(id) : t?.release_id ? ix.releases.get(t.release_id) : undefined;
       const key = r ? `r${r.id}` : `t${id}`;
-      const g = groups.get(key) ?? { key, rank, release: r, trackIds: [], to: r ? `/release/${r.id}` : t ? `/track/${t.id}` : undefined, title: r?.title ?? t?.title ?? 'Loading…', sub: r ? `${r.artist_credit ?? ''}${r.year ? ` · ${r.year}` : ''}` : t?.artist_credit ?? '', img: r?.artwork_url, rate: r ? { type: 'release' as const, id: r.id } : t ? { type: 'track' as const, id: t.id } : undefined };
+      const g = groups.get(key) ?? { key, itemIds: [] as string[], rank, release: r, trackIds: [], to: r ? `/release/${r.id}` : t ? `/track/${t.id}` : undefined, title: r?.title ?? t?.title ?? 'Loading…', sub: r ? `${r.artist_credit ?? ''}${r.year ? ` · ${r.year}` : ''}` : t?.artist_credit ?? '', img: r?.artwork_url, rate: r ? { type: 'release' as const, id: r.id } : t ? { type: 'track' as const, id: t.id } : undefined };
       if (t) g.trackIds.push(t.id);
+      g.itemIds.push(it.id);
       groups.set(key, g);
     } else if (it.entity_type === 'artist') {
-      const a = ix.artists.get(id); groups.set(`a${id}`, { key: `a${id}`, rank, trackIds: [], to: a ? `/artist/${id}` : undefined, title: a?.name ?? 'Removed', sub: 'Artist', img: a?.image_url, round: true, rate: a ? { type: 'artist', id } : undefined });
+      const a = ix.artists.get(id); groups.set(`a${id}`, { key: `a${id}`, itemIds: [it.id], rank, trackIds: [], to: a ? `/artist/${id}` : undefined, title: a?.name ?? 'Removed', sub: 'Artist', img: a?.image_url, round: true, rate: a ? { type: 'artist', id } : undefined });
     } else if (it.entity_type === 'label') {
-      const l = ix.labels.get(id); groups.set(`l${id}`, { key: `l${id}`, rank, trackIds: [], to: l ? `/label/${id}` : undefined, title: l?.name ?? 'Removed', sub: 'Label', img: l?.image_url });
-    } else groups.set(`x${it.id}`, { key: `x${it.id}`, rank, trackIds: [], title: it.label ?? '', sub: 'Not in your library yet' });
+      const l = ix.labels.get(id); groups.set(`l${id}`, { key: `l${id}`, itemIds: [it.id], rank, trackIds: [], to: l ? `/label/${id}` : undefined, title: l?.name ?? 'Removed', sub: 'Label', img: l?.image_url });
+    } else groups.set(`x${it.id}`, { key: `x${it.id}`, itemIds: [it.id], rank, trackIds: [], title: it.label ?? '', sub: 'Not in your library yet' });
   }
   return [...groups.values()];
 }
 
-export function CoverGrid({ groups, label, extra }: { groups: Group[]; label: string; extra?: (g: Group) => ReactNode }) {
-  return (
+export function CoverGrid({ groups, label, extra, onReorder }: { groups: Group[]; label: string; extra?: (g: Group) => ReactNode; onReorder?: (itemIds: string[]) => void }) {
+  const ids = groups.map((g) => g.key);
+  const grid = (
     <div className="grid">{groups.map((g) => (
-      <div key={g.key} className="tile">
+      <SortableItem key={g.key} id={g.key} disabled={!onReorder}>{({ ref, style, handle }) => (
+      <div ref={ref} style={style} className="tile">
         <div className="tile-cover">
+          {onReorder && <span className="tile-handle">{handle}</span>}
           {g.to ? <Link to={g.to} style={{ display: 'block' }}><Cover src={g.img} title={g.title} round={g.round} /></Link> : <Cover src={g.img} title={g.title} />}
           {g.rate && !g.round && <TileRate type={g.rate.type} id={g.rate.id} />}
           {g.rank && <span className="tile-rank">{g.rank}</span>}
@@ -116,7 +123,58 @@ export function CoverGrid({ groups, label, extra }: { groups: Group[]; label: st
         <div className="s">{g.release ? <><Credits release={g.release} />{g.release.year ? ` · ${g.release.year}` : ''}</> : g.sub}</div>
         {g.round && g.rate && <TileRate type={g.rate.type} id={g.rate.id} inline />}
         {(g.trackIds.length > 1 || extra) && <div className="meta">{g.trackIds.length > 1 && <span>{g.trackIds.length} songs</span>}{extra?.(g)}</div>}
-      </div>))}
+      </div>)}</SortableItem>))}
     </div>
   );
+  if (!onReorder) return grid;
+  // Moving a tile moves every item in it (an album's songs travel together)
+  return <Sortable ids={ids} grid onReorder={(keys) => onReorder(keys.flatMap((k) => groups.find((g) => g.key === k)!.itemIds))}>{grid}</Sortable>;
+}
+
+// ——— Drag and drop ———
+/** Wraps a list (or grid) whose children are SortableItems; reports the new order of ids when something is dropped. */
+export function Sortable({ ids, onReorder, grid, children }: { ids: string[]; onReorder: (ids: string[]) => void; grid?: boolean; children: ReactNode }) {
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const onDragEnd = (e: DragEndEvent) => {
+    if (!e.over || e.active.id === e.over.id) return;
+    const from = ids.indexOf(String(e.active.id)); const to = ids.indexOf(String(e.over.id));
+    if (from >= 0 && to >= 0) onReorder(arrayMove(ids, from, to));
+  };
+  return <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}><SortableContext items={ids} strategy={grid ? rectSortingStrategy : verticalListSortingStrategy}>{children}</SortableContext></DndContext>;
+}
+
+/** One draggable row or tile. Render-prop gives the ref and style for the element, and the grip handle to place in it. */
+export function SortableItem({ id, disabled, children }: { id: string; disabled?: boolean; children: (p: { ref: (el: HTMLElement | null) => void; style: CSSProperties; handle: ReactNode; dragging: boolean }) => ReactNode }) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } = useSortable({ id, disabled });
+  const style: CSSProperties = { transform: CSS.Translate.toString(transform), transition, position: 'relative', zIndex: isDragging ? 5 : undefined, opacity: isDragging ? 0.85 : undefined, boxShadow: isDragging ? '0 6px 20px rgba(0,0,0,.25)' : undefined };
+  const handle = disabled ? null : <button type="button" ref={setActivatorNodeRef} className="drag-handle" aria-label="Drag to reorder" title="Drag to reorder" {...attributes} {...listeners}>⋮⋮</button>;
+  return <>{children({ ref: setNodeRef, style, handle, dragging: isDragging })}</>;
+}
+
+/** The order a list is shown in by default: yours once you've dragged anything (or it's ranked), otherwise newest release first. */
+export function orderItems(ix: Index, list: List, items: ListItem[]): ListItem[] {
+  const byPos = [...items].sort((a, b) => a.position - b.position);
+  if (list.custom_order || list.ranked) return byPos;
+  const day = (it: ListItem) => {
+    const id = it.entity_id ?? '';
+    const r = it.entity_type === 'release' ? ix.releases.get(id) : it.entity_type === 'track' ? ix.releases.get(ix.tracks.get(id)?.release_id ?? '') : undefined;
+    return r?.date ?? (r?.year ? String(r.year) : '');
+  };
+  return byPos.map((it, i) => ({ it, i, d: day(it) })).sort((a, b) => (b.d && a.d ? b.d.localeCompare(a.d) : a.d ? -1 : b.d ? 1 : 0) || a.i - b.i).map((x) => x.it);
+}
+
+/** Save a new hand-made order: positions follow the given ids, and the list remembers it's been ordered by hand. */
+export function useSaveOrder() {
+  const { upsert, ix } = useStore();
+  return async (list: List, orderedIds: string[]) => {
+    const all = ix.itemsByList.get(list.id) ?? [];
+    const rest = all.filter((it) => !orderedIds.includes(it.id)).sort((a, b) => a.position - b.position).map((it) => it.id);
+    const pos = new Map([...orderedIds, ...rest].map((id, i) => [id, i + 1]));
+    await upsert('list_items', all.filter((it) => it.position !== pos.get(it.id)).map((it) => ({ ...it, position: pos.get(it.id)! })));
+    if (!list.custom_order) await upsert('lists', [{ ...list, custom_order: true, updated_at: now() }]);
+  };
 }

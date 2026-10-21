@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { SortSelect, usePref } from '../components/controls';
 import { Cover, QuickRate } from '../components/ui';
 import PlaylistView from './Playlist';
-import { CoverGrid, CoverPicker, groupForCovers, ListCover } from '../components/ListBits';
+import { CoverGrid, CoverPicker, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useSaveOrder } from '../components/ListBits';
 import { norm, useStore, type Index } from '../lib/store';
 import type { ListItem } from '../lib/types';
 import { now, uid } from '../lib/util';
@@ -55,7 +55,9 @@ export default function ListPage() {
   const { data, ix, upsert, remove } = useStore();
   const nav = useNavigate();
   const l = ix.lists.get(id!);
-  const items = useMemo(() => [...(ix.itemsByList.get(id!) ?? [])].sort((a, b) => a.position - b.position), [ix, id]);
+  const l0 = ix.lists.get(id!);
+  const items = useMemo(() => (l0 ? orderItems(ix, l0, ix.itemsByList.get(id!) ?? []) : []), [ix, id, l0]);
+  const saveOrder = useSaveOrder();
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('');
   const [itemSort, setItemSort] = useState('order');
@@ -72,11 +74,9 @@ export default function ListPage() {
   if (!l) return <div className="empty">List not found. <Link to="/lists">All lists</Link></div>;
   if (l.kind === 'playlist') return <PlaylistView list={l} />;
 
-  const renumber = (arr: ListItem[]) => upsert('list_items', arr.map((it, i) => ({ ...it, position: i + 1 })));
-  const move = (i: number, d: number) => { const a = [...items]; const j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; void renumber(a); };
   const touch = () => upsert('lists', [{ ...l, updated_at: now() }]);
   const add = async (type: ListItem['entity_type'], eid: string | null, label?: string) => {
-    await upsert('list_items', [{ id: uid(), list_id: l.id, entity_type: type, entity_id: eid, label: label ?? null, position: (items.at(-1)?.position ?? 0) + 1 }]); void touch(); setQ('');
+    await upsert('list_items', [{ id: uid(), list_id: l.id, entity_type: type, entity_id: eid, label: label ?? null, position: Math.max(0, ...items.map((x) => x.position)) + 1 }]); void touch(); setQ('');
   };
   const fn = norm(filter);
   const rel = (it: ListItem) => it.entity_type === 'release' ? ix.releases.get(it.entity_id!) : it.entity_type === 'track' ? ix.releases.get(ix.tracks.get(it.entity_id!)?.release_id ?? '') : undefined;
@@ -102,10 +102,11 @@ export default function ListPage() {
       {picking && <CoverPicker list={l} items={items} onClose={() => setPicking(false)} />}
       <div className="row" style={{ margin: '16px 0 22px' }}>
         <label className="row"><input type="checkbox" checked={l.ranked} onChange={(e) => upsert('lists', [{ ...l, ranked: e.target.checked }])} /> Ranked</label>
-        <SortSelect value={itemSort} onChange={setItemSort} options={[['order', l.ranked ? 'Ranking' : 'List order'], ['rating', 'Your rating'], ['newest', 'Newest first'], ['oldest', 'Oldest first'], ['title', 'A–Z']]} />
+        <SortSelect value={itemSort} onChange={setItemSort} options={[['order', l.ranked ? 'Ranking' : l.custom_order ? 'Your order' : 'Your order (newest first)'], ['rating', 'Your rating'], ['newest', 'Newest first'], ['oldest', 'Oldest first'], ['title', 'A–Z']]} />
         <div className="seg" role="group" aria-label="View">{[['compact', 'List view'], ['covers', 'Album view']].map(([v, t]) => <button key={v} className={(view === 'covers') === (v === 'covers') ? 'on' : ''} onClick={() => setView(v)}>{t}</button>)}</div>
         <span className="muted">{items.length} items</span>
         {items.length > 12 && <input className="input" placeholder="Filter this list" value={filter} onChange={(e) => setFilter(e.target.value)} />}
+        {!canMove && items.length > 1 && <span className="small muted">{filter ? 'Clear the filter' : `Switch to “${l.ranked ? 'Ranking' : 'Your order'}”`} to drag items around</span>}
         <span className="spacer" />
         <button className="btn danger" onClick={async () => { if (confirm(`Delete the list “${l.name}”? Nothing in your library is deleted.`)) { await remove('list_items', items.map((i) => i.id)); await remove('lists', [l.id]); nav('/lists'); } }}>Delete list</button>
       </div>
@@ -118,12 +119,14 @@ export default function ListPage() {
         </div>}
       </div>
       {!items.length ? <div className="empty">This list is empty. Search above, or use “Add to list” on any page.</div> : view === 'covers' ? (
-        <CoverGrid groups={groupForCovers(ix, shownItems, l.ranked ? new Map(items.map((it, i) => [it.id, i + 1])) : undefined)} label={l.name} />
+        <CoverGrid groups={groupForCovers(ix, shownItems, l.ranked ? new Map(items.map((it, i) => [it.id, i + 1])) : undefined)} label={l.name} onReorder={canMove ? (ids) => void saveOrder(l, ids) : undefined} />
       ) : (
-        <ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{shownItems.map((it) => {
+        <Sortable ids={shownItems.map((it) => it.id)} onReorder={(ids) => void saveOrder(l, ids)}><ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{shownItems.map((it) => {
           const i = items.indexOf(it); const v = itemView(ix, it);
           return (
-            <li key={it.id} style={{ display: 'grid', gridTemplateColumns: `${l.ranked ? '34px ' : ''}28px minmax(0, 1.4fr) minmax(0, 1fr) 190px`, gap: 10, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--line)', fontSize: 14 }}>
+            <SortableItem key={it.id} id={it.id} disabled={!canMove}>{({ ref, style, handle }) => (
+            <li ref={ref} style={{ ...style, display: 'grid', gridTemplateColumns: `${canMove ? '24px ' : ''}${l.ranked ? '34px ' : ''}28px minmax(0, 1.4fr) minmax(0, 1fr) 190px`, gap: 10, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--line)', fontSize: 14, background: 'var(--bg)' }}>
+              {canMove && handle}
               {l.ranked && <span className="num muted" style={{ textAlign: 'right', fontWeight: 700 }}>{i + 1}</span>}
               <Cover src={v?.img} title={v?.title ?? '?'} size={28} round={v?.round} />
               <span style={{ minWidth: 0, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
@@ -133,11 +136,10 @@ export default function ListPage() {
                 onBlur={(e) => e.target.value !== (it.note ?? '') && upsert('list_items', [{ ...it, note: e.target.value || null }])} />
               <div className="row" style={{ flexWrap: 'nowrap', gap: 2, justifyContent: 'flex-end' }}>
                 {it.entity_type !== 'text' && it.entity_id && <QuickRate type={it.entity_type} id={it.entity_id} />}
-                {l.ranked && <><button className="btn sm ghost" aria-label="Move up" disabled={i === 0 || !canMove} onClick={() => move(i, -1)}>↑</button><button className="btn sm ghost" aria-label="Move down" disabled={i === items.length - 1 || !canMove} onClick={() => move(i, 1)}>↓</button></>}
                 <button className="btn sm ghost" aria-label="Remove" onClick={async () => { await remove('list_items', [it.id]); }}>✕</button>
               </div>
-            </li>);
-        })}</ol>
+            </li>)}</SortableItem>);
+        })}</ol></Sortable>
       )}
     </div>
   );

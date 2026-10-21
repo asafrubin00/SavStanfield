@@ -138,7 +138,7 @@ function Shell() {
           <QueueStatus />
         </header>
         <main className="page" style={playerOpen ? { paddingBottom: 260 } : undefined}>
-          {(missingTables.size > 0 || missingColumns.size > 0) && <div className="panel" style={{ marginBottom: 20, borderColor: 'var(--accent)' }}>One-time setup: the database needs a small update. In Supabase, open the SQL Editor, paste in {missingTables.size > 0 && <code>supabase/002-labels.sql</code>}{missingTables.size > 0 && missingColumns.size > 0 && ' and then '}{[...missingColumns].map((c, i) => <span key={c}>{i ? ' and ' : ''}<code>{c === 'lists.kind' ? 'supabase/003-playlists.sql' : 'supabase/004-list-covers.sql'}</code></span>)} from the repo, click Run, then reload this page.</div>}
+          {(missingTables.size > 0 || missingColumns.size > 0) && <div className="panel" style={{ marginBottom: 20, borderColor: 'var(--accent)' }}>One-time setup: the database needs a small update. In Supabase, open the SQL Editor, paste in {missingTables.size > 0 && <code>supabase/002-labels.sql</code>}{missingTables.size > 0 && missingColumns.size > 0 && ' and then '}{[...new Set([...missingColumns].map((c) => (c === 'lists.kind' ? 'supabase/003-playlists.sql' : 'supabase/005-list-order.sql')))].map((f, i) => <span key={f}>{i ? ' and ' : ''}<code>{f}</code></span>)} from the repo, click Run, then reload this page.</div>}
           {loading ? <div className="muted">Loading your library…</div> : error ? <div className="empty">Couldn't load your library: {error}</div> : (
             <Routes>
               <Route path="/" element={<Home />} />

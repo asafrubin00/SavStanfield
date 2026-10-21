@@ -141,7 +141,7 @@ export function AddToList({ type, id }: { type: EntityType; id: string }) {
       <input className="input" placeholder="or new list name" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 160 }} />
       <button className="btn" disabled={!name.trim()} onClick={async () => {
         const id2 = crypto.randomUUID();
-        await upsert('lists', [{ id: id2, name: name.trim(), ranked: true, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }]);
+        await upsert('lists', [{ id: id2, name: name.trim(), ranked: false, created_at: new Date().toISOString(), updated_at: new Date().toISOString() }]);
         await addToList(id2, type, id); setOpen(false); setName('');
       }}>Create</button>
       <button className="btn ghost" onClick={() => setOpen(false)}>Cancel</button>

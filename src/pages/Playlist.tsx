@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { SortSelect, usePref } from '../components/controls';
-import { CoverGrid, CoverPicker, groupForCovers, ListCover } from '../components/ListBits';
+import { CoverGrid, CoverPicker, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useSaveOrder } from '../components/ListBits';
 import { Cover, fmtMs, QuickRate } from '../components/ui';
 import { adapter } from '../lib/db';
 import { player, trackEmbed, usePlayer } from '../lib/player';
@@ -23,7 +23,8 @@ export default function PlaylistView({ list: l }: { list: List }) {
   const { ix, data, upsert, remove, searchTracks, loadReleaseTracks, addTracksToList } = st;
   const nav = useNavigate();
   const ps = usePlayer();
-  const items = useMemo(() => [...(ix.itemsByList.get(l.id) ?? [])].filter((i) => i.entity_type === 'track').sort((a, b) => a.position - b.position), [ix, l.id]);
+  const items = useMemo(() => orderItems(ix, l, (ix.itemsByList.get(l.id) ?? []).filter((i) => i.entity_type === 'track')), [ix, l]);
+  const saveOrder = useSaveOrder();
   useEffect(() => { void st.loadTracks(items.map((i) => i.entity_id!).filter(Boolean)); }, [items.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const [sort, setSort] = useState('order');
   const [view, setView] = usePref(`list.view.${l.id}`, 'songs');
@@ -51,8 +52,7 @@ export default function PlaylistView({ list: l }: { list: List }) {
   const total = rows.reduce((s, x) => s + (x.t?.duration_ms ?? 0), 0);
   const playing = ps.ids.length ? ps.ids[ps.index] : null;
 
-  const renumber = (arr: ListItem[]) => upsert('list_items', arr.map((it, i) => ({ ...it, position: i + 1 })));
-  const move = (i: number, d: number) => { const a = [...items]; const j = i + d; if (j < 0 || j >= a.length) return; [a[i], a[j]] = [a[j], a[i]]; void renumber(a); };
+  const canDrag = sort === 'order';
 
   function exportCsv() {
     const head = ['#', 'Title', 'Artist', 'Album', 'Year', 'Length', 'Apple Music', 'Deezer'];
@@ -76,7 +76,8 @@ export default function PlaylistView({ list: l }: { list: List }) {
         <button className="btn primary" disabled={!ids.length} onClick={() => player.play(ids, 0, l.name)}>Play</button>
         <button className="btn" disabled={!ids.length} onClick={() => player.shuffle(ids, l.name)}>Shuffle</button>
         <div className="seg" role="group" aria-label="View"><button className={view !== 'albums' ? 'on' : ''} onClick={() => setView('songs')}>Songs</button><button className={view === 'albums' ? 'on' : ''} onClick={() => setView('albums')}>Albums</button></div>
-        <SortSelect value={sort} onChange={setSort} options={[['order', 'Playlist order'], ['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['length', 'Length'], ['rating', 'Your rating'], ['newest', 'Newest release']]} />
+        <SortSelect value={sort} onChange={setSort} options={[['order', l.custom_order ? 'Your order' : 'Your order (newest first)'], ['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['length', 'Length'], ['rating', 'Your rating'], ['newest', 'Newest release']]} />
+        {!canDrag && rows.length > 1 && <span className="small muted">Switch to “Your order” to drag songs around</span>}
         <span className="spacer" />
         <button className="btn" disabled={!rows.length} onClick={exportCsv} title="Spreadsheet with Apple Music links">Export CSV</button>
         <button className="btn" disabled={!rows.length} onClick={exportTxt} title="“Artist - Title” lines — paste into TuneMyMusic or Soundiiz to recreate it in Apple Music">Export text</button>
@@ -109,14 +110,16 @@ export default function PlaylistView({ list: l }: { list: List }) {
 
       {picking && <CoverPicker list={l} items={items} onClose={() => setPicking(false)} />}
       {!rows.length ? <div className="empty">No songs yet. Search above, or use “+ Playlist” on any album’s tracklist.</div> : view === 'albums' ? (
-        <CoverGrid groups={groupForCovers(ix, shown.map((x) => x.it))} label={l.name} />
+        <CoverGrid groups={groupForCovers(ix, shown.map((x) => x.it))} label={l.name} onReorder={canDrag ? (ids) => void saveOrder(l, ids) : undefined} />
       ) : (
         <div className="table-wrap"><table className="table">
-          <thead><tr><th style={{ width: 36 }}>#</th><th className="thumb" /><th>Title</th><th>Album</th><th style={{ textAlign: 'right' }}>Length</th><th /><th /></tr></thead>
-          <tbody>{shown.map((x) => {
+          <thead><tr>{canDrag && <th style={{ width: 28 }} />}<th style={{ width: 36 }}>#</th><th className="thumb" /><th>Title</th><th>Album</th><th style={{ textAlign: 'right' }}>Length</th><th /><th /></tr></thead>
+          <Sortable ids={shown.map((x) => x.it.id)} onReorder={(ids) => void saveOrder(l, ids)}><tbody>{shown.map((x) => {
             const isPlaying = x.t && x.t.id === playing;
             return (
-              <tr key={x.it.id} style={isPlaying ? { background: 'color-mix(in srgb, var(--accent) 12%, transparent)' } : undefined}>
+              <SortableItem key={x.it.id} id={x.it.id} disabled={!canDrag}>{({ ref, style, handle }) => (
+              <tr ref={ref} style={{ ...style, ...(isPlaying ? { background: 'color-mix(in srgb, var(--accent) 12%, transparent)' } : {}) }}>
+                {canDrag && <td>{handle}</td>}
                 <td className="num muted">
                   <button className="btn sm ghost" style={{ padding: '2px 6px' }} aria-label={`Play ${x.t?.title ?? ''}`} disabled={!x.t} onClick={() => player.play(ids, ids.indexOf(x.t!.id), l.name)}>{isPlaying ? '♪' : x.i + 1}</button>
                 </td>
@@ -126,11 +129,10 @@ export default function PlaylistView({ list: l }: { list: List }) {
                 <td className="num muted" style={{ textAlign: 'right' }}>{fmtMs(x.t?.duration_ms)}</td>
                 <td>{x.t && <QuickRate type="track" id={x.t.id} />}</td>
                 <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
-                  {sort === 'order' && <><button className="btn sm ghost" aria-label="Move up" disabled={x.i === 0} onClick={() => move(x.i, -1)}>↑</button><button className="btn sm ghost" aria-label="Move down" disabled={x.i === items.length - 1} onClick={() => move(x.i, 1)}>↓</button></>}
                   <button className="btn sm ghost" aria-label="Remove" onClick={() => remove('list_items', [x.it.id])}>✕</button>
                 </td>
-              </tr>);
-          })}</tbody>
+              </tr>)}</SortableItem>);
+          })}</tbody></Sortable>
         </table></div>
       )}
     </div>

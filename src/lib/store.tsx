@@ -383,7 +383,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const createList = useCallback(async (name: string, kind: 'list' | 'playlist') => {
     const id = uid();
-    await upsert('lists', [{ id, name: name.trim(), ranked: kind === 'list', kind, created_at: now(), updated_at: now() }]);
+    await upsert('lists', [{ id, name: name.trim(), ranked: false, kind, created_at: now(), updated_at: now() }]);
     return id;
   }, [upsert]);
   const addTracksToList = useCallback(async (listId: string, trackIds: string[]) => {
