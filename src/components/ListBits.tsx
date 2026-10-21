@@ -8,7 +8,7 @@ import { missingColumns } from '../lib/db';
 import { useStore, type Index } from '../lib/store';
 import type { List, ListItem, Release } from '../lib/types';
 import { now } from '../lib/util';
-import { Cover, Credits, Modal, TileRate } from './ui';
+import { Cover, Credits, hue, Modal, TileRate } from './ui';
 
 /** Cover images for a list: the custom cover if set, otherwise up to four covers from what's in it. */
 export function listImages(ix: Index, items: ListItem[]): string[] {
@@ -24,12 +24,12 @@ export function listImages(ix: Index, items: ListItem[]): string[] {
   return out;
 }
 
-export function ListCover({ list, items, onClick }: { list: List; items: ListItem[]; onClick?: () => void }) {
-  const { ix } = useStore();
-  const imgs = list.cover_url ? [] : listImages(ix, items);
+/** A list's cover: your own image if you've set one, otherwise a plain tile in a colour from its name, with the name on it. */
+export function ListCover({ list, onClick }: { list: List; items?: ListItem[]; onClick?: () => void }) {
+  const h = hue(list.name || '?');
   const body = list.cover_url ? <img src={list.cover_url} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-    : imgs.length === 4 ? <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', width: '100%', height: '100%' }}>{imgs.map((s, i) => <img key={i} src={s} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />)}</div>
-      : <Cover src={imgs[0]} title={list.name} />;
+    : <div className="list-ph" style={{ background: `linear-gradient(150deg, hsl(${h} 34% 40%), hsl(${(h + 35) % 360} 40% 20%))` }}>
+        {list.kind === 'folder' && <span className="list-ph-kind">Folder</span>}<span className="list-ph-name">{list.name || 'Untitled'}</span></div>;
   return onClick
     ? <button type="button" className="cover list-cover" onClick={onClick} title="Change cover" style={{ padding: 0, border: 0, cursor: 'pointer', display: 'block', width: '100%' }}>{body}<span className="list-cover-edit">Change cover</span></button>
     : <div className="cover">{body}</div>;
@@ -177,5 +177,53 @@ export function useSaveOrder() {
     const pos = new Map([...orderedIds, ...rest].map((id, i) => [id, i + 1]));
     await upsert('list_items', all.filter((it) => it.position !== pos.get(it.id)).map((it) => ({ ...it, position: pos.get(it.id)! })));
     if (!list.custom_order) await upsert('lists', [{ ...list, custom_order: true, updated_at: now() }]);
+  };
+}
+
+
+// ——— Folders ———
+/** Which folder each list sits in (folders are lists of kind "folder" whose items point at other lists). */
+export function folderOfMap(ix: Index, lists: List[]): Map<string, string> {
+  const m = new Map<string, string>();
+  for (const f of lists) if (f.kind === 'folder') for (const it of ix.itemsByList.get(f.id) ?? []) if (it.entity_type === 'list' && it.entity_id && !m.has(it.entity_id)) m.set(it.entity_id, f.id);
+  return m;
+}
+
+/** Put a list in a folder (or take it out with null). A list lives in one folder at a time. */
+export function useMoveToFolder() {
+  const { data, upsert, remove, say, ix } = useStore();
+  return async (listId: string, folderId: string | null, quiet = false) => {
+    const old = data.list_items.filter((i) => i.entity_type === 'list' && i.entity_id === listId);
+    if (folderId && old.length === 1 && old[0].list_id === folderId) return;
+    if (old.length) await remove('list_items', old.map((i) => i.id));
+    if (folderId) {
+      const pos = Math.max(0, ...(ix.itemsByList.get(folderId) ?? []).map((i) => i.position)) + 1;
+      await upsert('list_items', [{ id: crypto.randomUUID(), list_id: folderId, entity_type: 'list', entity_id: listId, label: null, position: pos }]);
+    }
+    if (!quiet) say(folderId ? `Moved to ${ix.lists.get(folderId)?.name ?? 'folder'}` : 'Taken out of its folder');
+  };
+}
+
+/** "Folder: …" picker for a list's own page. */
+export function FolderSelect({ list }: { list: List }) {
+  const { data, ix } = useStore();
+  const move = useMoveToFolder();
+  const folders = data.lists.filter((l) => l.kind === 'folder').sort((a, b) => a.name.localeCompare(b.name));
+  const cur = folderOfMap(ix, data.lists).get(list.id) ?? '';
+  if (!folders.length) return null;
+  return (
+    <label className="row small" style={{ gap: 6 }}><span className="muted">Folder</span>
+      <select className="select" value={cur} onChange={(e) => void move(list.id, e.target.value || null)} aria-label="Folder">
+        <option value="">None</option>{folders.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+      </select></label>
+  );
+}
+
+/** Remove a list or playlist and its folder membership. */
+export function useDeleteList() {
+  const { data, ix, remove } = useStore();
+  return async (list: List) => {
+    await remove('list_items', [...(ix.itemsByList.get(list.id) ?? []).map((i) => i.id), ...data.list_items.filter((i) => i.entity_type === 'list' && i.entity_id === list.id).map((i) => i.id)]);
+    await remove('lists', [list.id]);
   };
 }

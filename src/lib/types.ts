@@ -47,9 +47,9 @@ export interface CriticScore {
   id: string; release_id: string; source: string; score?: number | null; max: number; url?: string | null;
 }
 
-export interface List { id: string; name: string; description?: string | null; ranked: boolean; kind?: 'list' | 'playlist' | 'artists'; cover_url?: string | null; custom_order?: boolean; created_at?: string; updated_at?: string }
+export interface List { id: string; name: string; description?: string | null; ranked: boolean; kind?: 'list' | 'playlist' | 'artists' | 'folder'; cover_url?: string | null; custom_order?: boolean; created_at?: string; updated_at?: string }
 export interface ListItem {
-  id: string; list_id: string; entity_type: EntityType | 'text'; entity_id?: string | null;
+  id: string; list_id: string; entity_type: EntityType | 'text' | 'list'; entity_id?: string | null;
   label?: string | null; position: number; note?: string | null;
 }
 

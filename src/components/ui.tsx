@@ -4,7 +4,7 @@ import { LINK_META, searchLinks } from '../lib/links';
 import { releaseArtists, useStore } from '../lib/store';
 import type { Artist, EntityType, LinkKey, Links, Release } from '../lib/types';
 
-function hue(s: string) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
+export function hue(s: string) { let h = 0; for (const c of s) h = (h * 31 + c.charCodeAt(0)) % 360; return h; }
 
 export function Cover({ src, title, round, size, eager }: { src?: string | null; title: string; round?: boolean; size?: number; eager?: boolean }) {
   const [broken, setBroken] = useState(false);
@@ -136,7 +136,7 @@ export function AddToList({ type, id }: { type: EntityType; id: string }) {
     <span className="row">
       <select className="select" autoFocus defaultValue="" onChange={async (e) => { if (e.target.value) { await addToList(e.target.value, type, id); setOpen(false); } }}>
         <option value="" disabled>Choose a list…</option>
-        {[...data.lists].filter((l) => (type === 'artist' ? l.kind !== 'playlist' : l.kind !== 'artists')).sort((a, b) => a.name.localeCompare(b.name)).map((l) => <option key={l.id} value={l.id}>{l.name}{l.kind === 'artists' ? ' (artists)' : ''}</option>)}
+        {[...data.lists].filter((l) => l.kind !== 'folder' && (type === 'artist' ? l.kind !== 'playlist' : l.kind !== 'artists')).sort((a, b) => a.name.localeCompare(b.name)).map((l) => <option key={l.id} value={l.id}>{l.name}{l.kind === 'artists' ? ' (artists)' : ''}</option>)}
       </select>
       <input className="input" placeholder="or new list name" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 160 }} />
       <button className="btn" disabled={!name.trim()} onClick={async () => {

@@ -113,7 +113,7 @@ function Shell() {
   const toReview = useMemo(() => { const t = new Date().toISOString().slice(0, 10); return data.releases.filter((r) => needsReview(r, t)).length; }, [data.releases]);
   const nav: [string, string, number | null][] = [
     ['/', 'Home', null], ['/library', 'Library', data.releases.length], ['/artists', 'Artists', data.artists.length],
-    ['/producers', 'Producers', producers], ['/labels', 'Labels', data.labels.length], ['/lists', 'Lists', data.lists.length], ['/charts', 'Charts', null],
+    ['/producers', 'Producers', producers], ['/labels', 'Labels', data.labels.length], ['/lists', 'Lists', data.lists.filter((l) => l.kind !== 'folder').length], ['/charts', 'Charts', null],
     ['/concerts', 'Concerts', data.concerts.length],
   ];
   return (

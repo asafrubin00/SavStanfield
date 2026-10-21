@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { DndContext, KeyboardSensor, PointerSensor, pointerWithin, TouchSensor, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
+import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
 import { SortSelect, usePref } from '../components/controls';
 import { Cover, QuickRate } from '../components/ui';
 import PlaylistView from './Playlist';
-import { CoverGrid, CoverPicker, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useSaveOrder } from '../components/ListBits';
+import { CoverGrid, CoverPicker, FolderSelect, folderOfMap, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useMoveToFolder, useSaveOrder } from '../components/ListBits';
 import { norm, useStore, type Index } from '../lib/store';
-import type { ListItem } from '../lib/types';
+import type { List, ListItem } from '../lib/types';
 import { now, uid } from '../lib/util';
 
 function itemView(ix: Index, it: ListItem) {
@@ -16,42 +18,128 @@ function itemView(ix: Index, it: ListItem) {
   return { to: '', title: it.label ?? '', sub: 'Not in your library yet', img: null, round: false };
 }
 
+type Kind = NonNullable<List['kind']>;
+const KIND_SUB = (l: List, n: number) => l.kind === 'playlist' ? `Playlist · ${n} song${n === 1 ? '' : 's'}` : l.kind === 'artists' ? `Artists · ${n}` : `${n} item${n === 1 ? '' : 's'}`;
+
+/** A folder (or "All" / "Not in a folder") in the left column; lists can be dropped on it. */
+function RailItem({ id, label, count, on, onClick, droppable }: { id: string; label: string; count: number; on: boolean; onClick: () => void; droppable: boolean }) {
+  const { setNodeRef, isOver } = useDroppable({ id: `folder:${id}`, disabled: !droppable });
+  return (
+    <button ref={setNodeRef} type="button" className={`rail-item${on ? ' on' : ''}${isOver ? ' over' : ''}`} onClick={onClick}>
+      <span className="rail-name">{label}</span><span className="rail-n num">{count}</span>
+    </button>
+  );
+}
+
 export function Lists() {
-  const { data, ix, createList, upsert } = useStore();
+  const { data, ix, createList, upsert, say } = useStore();
   const nav = useNavigate();
+  const [sp, setSp] = useSearchParams();
+  const sel = sp.get('folder') ?? 'all';
+  const select = (v: string) => { const n = new URLSearchParams(sp); if (v === 'all') n.delete('folder'); else n.set('folder', v); setSp(n, { replace: true }); };
+  const move = useMoveToFolder();
+  const saveOrder = useSaveOrder();
+  const deleteList = useDeleteList();
   // Lists that only hold artists become artist lists (e.g. XXL Freshmen from the spreadsheet)
   useEffect(() => {
     const convert = data.lists.filter((l) => (l.kind ?? 'list') === 'list' && (ix.itemsByList.get(l.id)?.length ?? 0) > 0 && ix.itemsByList.get(l.id)!.every((i) => i.entity_type === 'artist'));
     if (convert.length) void upsert('lists', convert.map((l) => ({ ...l, kind: 'artists' as const, custom_order: true })));
   }, [data.lists, ix, upsert]);
   const [name, setName] = useState('');
+  const [newFolder, setNewFolder] = useState<string | null>(null);
+  const [picking, setPicking] = useState(false);
   const [show, setShow] = usePref('lists.show', 'all');
-  const [sort, setSort] = usePref('lists.sort', 'updated');
+  const [sortTop, setSortTop] = usePref('lists.sort', 'updated');
+  const [sortFolder, setSortFolder] = usePref('lists.sort.folder', 'order');
+  const folders = useMemo(() => data.lists.filter((l) => l.kind === 'folder').sort((a, b) => a.name.localeCompare(b.name)), [data.lists]);
+  const folder = folders.find((f) => f.id === sel);
+  const parent = useMemo(() => folderOfMap(ix, data.lists), [ix, data.lists]);
+  const all = data.lists.filter((l) => l.kind !== 'folder');
+  const sort = folder ? sortFolder : sortTop === 'order' ? 'updated' : sortTop;
+  const setSort = folder ? setSortFolder : setSortTop;
   const size = (id: string) => ix.itemsByList.get(id)?.length ?? 0;
-  const lists = data.lists.filter((l) => show === 'all' || (l.kind ?? 'list') === show).sort(sort === 'az' ? (a, b) => a.name.localeCompare(b.name) : sort === 'created' ? (a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')
-    : sort === 'size' ? (a, b) => size(b.id) - size(a.id) : (a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
+  const inFolderPos = new Map((folder ? ix.itemsByList.get(folder.id) ?? [] : []).map((i) => [i.entity_id ?? '', i]));
+  const lists = all.filter((l) => (sel === 'all' || (sel === 'unfiled' ? !parent.has(l.id) : parent.get(l.id) === sel)) && (show === 'all' || (l.kind ?? 'list') === show))
+    .sort(sort === 'order' ? (a, b) => (inFolderPos.get(a.id)?.position ?? 0) - (inFolderPos.get(b.id)?.position ?? 0)
+      : sort === 'az' ? (a, b) => a.name.localeCompare(b.name) : sort === 'created' ? (a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')
+        : sort === 'size' ? (a, b) => size(b.id) - size(a.id) : (a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
+  const canReorder = !!folder && sort === 'order' && show === 'all';
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
+  const onDragEnd = (e: DragEndEvent) => {
+    const over = e.over ? String(e.over.id) : ''; const id = String(e.active.id);
+    if (over.startsWith('folder:')) { const f = over.slice(7); if (f !== 'all') void move(id, f === 'unfiled' ? null : f); return; }
+    if (canReorder && folder && over && over !== id) {
+      const ids = lists.map((l) => l.id); const next = arrayMove(ids, ids.indexOf(id), ids.indexOf(over));
+      void saveOrder(folder, next.map((x) => inFolderPos.get(x)!.id).filter(Boolean));
+    }
+  };
+  const create = async (kind: Kind) => {
+    const id = await createList(name, kind); setName('');
+    if (folder) await move(id, folder.id, true);
+    nav(`/list/${id}`);
+  };
+  const count = (f: string) => all.filter((l) => (f === 'all' ? true : f === 'unfiled' ? !parent.has(l.id) : parent.get(l.id) === f)).length;
+
   return (
     <div>
-      <div className="row" style={{ marginBottom: 20 }}><h1 className="h-page">Lists</h1><span className="spacer" />
-        <div className="seg" role="group" aria-label="Show">{[['all', 'All'], ['list', 'Lists'], ['playlist', 'Playlists'], ['artists', 'Artists']].map(([v, t]) => <button key={v} className={show === v ? 'on' : ''} onClick={() => setShow(v)}>{t}</button>)}</div>
-        <SortSelect value={sort} onChange={setSort} options={[['updated', 'Recently changed'], ['created', 'Newest'], ['az', 'A–Z'], ['size', 'Biggest']]} /></div>
+      <div className="row" style={{ marginBottom: 20 }}><h1 className="h-page">Lists</h1></div>
       <form className="row" style={{ marginBottom: 24 }} onSubmit={(e) => e.preventDefault()}>
         <input className="input" style={{ width: 300 }} placeholder="Name, e.g. Best of 2026 or Late night drive" value={name} onChange={(e) => setName(e.target.value)} />
-        <button className="btn primary" disabled={!name.trim()} onClick={async () => { const id = await createList(name, 'playlist'); setName(''); nav(`/list/${id}`); }}>Create playlist</button>
-        <button className="btn" disabled={!name.trim()} onClick={async () => { const id = await createList(name, 'list'); setName(''); nav(`/list/${id}`); }}>Create list</button>
-        <button className="btn" disabled={!name.trim()} onClick={async () => { const id = await createList(name, 'artists'); setName(''); nav(`/list/${id}`); }}>Create artist list</button>
-        <span className="small muted">Playlists are songs you can play in order. Lists can hold anything — albums, artists, songs.</span>
+        <button className="btn primary" disabled={!name.trim()} onClick={() => void create('playlist')}>Create playlist</button>
+        <button className="btn" disabled={!name.trim()} onClick={() => void create('list')}>Create list</button>
+        <button className="btn" disabled={!name.trim()} onClick={() => void create('artists')}>Create artist list</button>
+        <span className="small muted">{folder ? `Goes into “${folder.name}”.` : 'Playlists are songs you can play in order. Lists can hold anything — albums, artists, songs.'}</span>
       </form>
-      {!lists.length ? <div className="empty">No lists yet. Make one above, or use “Add to list” on any artist, release or song.</div> : (
-        <div className="grid">{lists.map((l) => {
-          const items = [...(ix.itemsByList.get(l.id) ?? [])].sort((a, b) => a.position - b.position);
-          return (
-            <Link key={l.id} to={`/list/${l.id}`} className="tile" style={{ textDecoration: 'none' }}>
-              <ListCover list={l} items={items} />
-              <div className="t">{l.name}</div><div className="s">{l.kind === 'playlist' ? `Playlist · ${items.length} song${items.length === 1 ? '' : 's'}` : l.kind === 'artists' ? `Artists · ${items.length}` : `${items.length} item${items.length === 1 ? '' : 's'}`}</div>
-            </Link>);
-        })}</div>
-      )}
+      <DndContext sensors={sensors} collisionDetection={pointerWithin} onDragEnd={onDragEnd}>
+        <div className="lists-layout">
+          <nav className="rail" aria-label="Folders">
+            <RailItem id="all" label="All lists" count={count('all')} on={sel === 'all'} onClick={() => select('all')} droppable={false} />
+            <RailItem id="unfiled" label="Not in a folder" count={count('unfiled')} on={sel === 'unfiled'} onClick={() => select('unfiled')} droppable />
+            {folders.length > 0 && <div className="rail-sep">Folders</div>}
+            {folders.map((f) => <RailItem key={f.id} id={f.id} label={f.name || 'Untitled'} count={count(f.id)} on={sel === f.id} onClick={() => select(f.id)} droppable />)}
+            {newFolder === null ? <button type="button" className="rail-item rail-add" onClick={() => setNewFolder('')}>+ New folder</button>
+              : <form onSubmit={async (e) => { e.preventDefault(); if (!newFolder.trim()) return; const id = await createList(newFolder, 'folder'); setNewFolder(null); select(id); }}>
+                <input className="input" style={{ width: '100%' }} autoFocus placeholder="Folder name" value={newFolder} onChange={(e) => setNewFolder(e.target.value)} onBlur={() => !newFolder.trim() && setNewFolder(null)} onKeyDown={(e) => e.key === 'Escape' && setNewFolder(null)} />
+              </form>}
+            <div className="small muted" style={{ marginTop: 10 }}>Drag a list’s ⋮⋮ handle onto a folder to file it.</div>
+          </nav>
+          <select className="select rail-mobile" value={sel} onChange={(e) => select(e.target.value)} aria-label="Folder">
+            <option value="all">All lists ({count('all')})</option><option value="unfiled">Not in a folder ({count('unfiled')})</option>
+            {folders.map((f) => <option key={f.id} value={f.id}>{f.name} ({count(f.id)})</option>)}
+          </select>
+          <section style={{ minWidth: 0 }}>
+            {folder && <div className="hero" style={{ gridTemplateColumns: 'minmax(100px, 150px) 1fr', alignItems: 'end', marginBottom: 18 }}>
+              <ListCover list={folder} onClick={() => setPicking(true)} />
+              <div>
+                <div className="muted" style={{ marginBottom: 6 }}>Folder</div>
+                <input className="h-page" style={{ border: 0, background: 'transparent', width: '100%', padding: 0 }} value={folder.name} aria-label="Folder name" onChange={(e) => upsert('lists', [{ ...folder, name: e.target.value, updated_at: now() }])} />
+                <button className="btn sm danger" style={{ marginTop: 8 }} onClick={async () => { if (confirm(`Delete the folder “${folder.name}”? The lists in it stay — they just won't be in a folder.`)) { await deleteList(folder); select('all'); say('Folder deleted'); } }}>Delete folder</button>
+              </div>
+            </div>}
+            {picking && folder && <CoverPicker list={folder} items={[]} onClose={() => setPicking(false)} />}
+            <div className="row" style={{ marginBottom: 16 }}>
+              <div className="seg" role="group" aria-label="Show">{[['all', 'All'], ['list', 'Lists'], ['playlist', 'Playlists'], ['artists', 'Artists']].map(([v, t]) => <button key={v} className={show === v ? 'on' : ''} onClick={() => setShow(v)}>{t}</button>)}</div>
+              <SortSelect value={sort} onChange={setSort} options={[...(folder ? [['order', 'Your order'] as [string, string]] : []), ['updated', 'Recently changed'], ['created', 'Newest'], ['az', 'A–Z'], ['size', 'Biggest']]} />
+              <span className="muted">{lists.length}</span>
+            </div>
+            {!lists.length ? <div className="empty">{folder ? 'This folder is empty. Drag lists onto it from “All lists”, or use the Folder menu on a list’s page.' : sel === 'unfiled' ? 'Everything is in a folder.' : 'No lists yet. Make one above, or use “Add to list” on any artist, release or song.'}</div> : (
+              <SortableContext items={lists.map((l) => l.id)} strategy={canReorder ? rectSortingStrategy : () => null}>
+                <div className="grid">{lists.map((l) => (
+                  <SortableItem key={l.id} id={l.id}>{({ ref, style, handle }) => (
+                    <div ref={ref} style={style} className="tile">
+                      <div className="tile-cover">
+                        <Link to={`/list/${l.id}`} style={{ display: 'block' }}><ListCover list={l} /></Link>
+                        <span className="tile-handle">{handle}</span>
+                      </div>
+                      <div className="t"><Link to={`/list/${l.id}`}>{l.name}</Link></div>
+                      <div className="s">{KIND_SUB(l, size(l.id))}{sel === 'all' && parent.get(l.id) ? ` · ${ix.lists.get(parent.get(l.id)!)?.name ?? ''}` : ''}</div>
+                    </div>)}</SortableItem>))}
+                </div>
+              </SortableContext>
+            )}
+          </section>
+        </div>
+      </DndContext>
     </div>
   );
 }
@@ -64,6 +152,7 @@ export default function ListPage() {
   const l0 = ix.lists.get(id!);
   const items = useMemo(() => (l0 ? orderItems(ix, l0, ix.itemsByList.get(id!) ?? []) : []), [ix, id, l0]);
   const saveOrder = useSaveOrder();
+  const deleteList = useDeleteList();
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('');
   const [itemSort, setItemSort] = useState('order');
@@ -81,6 +170,7 @@ export default function ListPage() {
   }, [q, data, isArt, ix]);
   if (!l) return <div className="empty">List not found. <Link to="/lists">All lists</Link></div>;
   if (l.kind === 'playlist') return <PlaylistView list={l} />;
+  if (l.kind === 'folder') return <Navigate to={`/lists?folder=${l.id}`} replace />;
 
   const touch = () => upsert('lists', [{ ...l, updated_at: now() }]);
   const add = async (type: ListItem['entity_type'], eid: string | null, label?: string) => {
@@ -109,6 +199,7 @@ export default function ListPage() {
       </div>
       {picking && <CoverPicker list={l} items={items} onClose={() => setPicking(false)} />}
       <div className="row" style={{ margin: '16px 0 22px' }}>
+        <FolderSelect list={l} />
         <label className="row"><input type="checkbox" checked={l.ranked} onChange={(e) => upsert('lists', [{ ...l, ranked: e.target.checked }])} /> Ranked</label>
         <SortSelect value={itemSort} onChange={setItemSort} options={isArt
           ? [['order', l.ranked ? 'Ranking' : l.custom_order ? 'Your order' : 'Your order (latest release first)'], ['rating', 'Your rating'], ['newest', 'Latest release'], ['title', 'A–Z']]
@@ -118,7 +209,7 @@ export default function ListPage() {
         {items.length > 12 && <input className="input" placeholder="Filter this list" value={filter} onChange={(e) => setFilter(e.target.value)} />}
         {!canMove && items.length > 1 && <span className="small muted">{filter ? 'Clear the filter' : `Switch to “${l.ranked ? 'Ranking' : 'Your order'}”`} to drag items around</span>}
         <span className="spacer" />
-        <button className="btn danger" onClick={async () => { if (confirm(`Delete the list “${l.name}”? Nothing in your library is deleted.`)) { await remove('list_items', items.map((i) => i.id)); await remove('lists', [l.id]); nav('/lists'); } }}>Delete list</button>
+        <button className="btn danger" onClick={async () => { if (confirm(`Delete the list “${l.name}”? Nothing in your library is deleted.`)) { await deleteList(l); nav('/lists'); } }}>Delete list</button>
       </div>
       <div className="search" style={{ maxWidth: 560, marginBottom: 20 }}>
         <input className="input" placeholder={isArt ? 'Add an artist — search your library' : 'Add from your library — search artists, releases, songs'} value={q} onChange={(e) => setQ(e.target.value)}
@@ -145,7 +236,7 @@ export default function ListPage() {
               <input className="input small" style={{ background: 'transparent', borderColor: 'transparent', padding: '2px 6px' }} placeholder="Add a note" defaultValue={it.note ?? ''}
                 onBlur={(e) => e.target.value !== (it.note ?? '') && upsert('list_items', [{ ...it, note: e.target.value || null }])} />
               <div className="row" style={{ flexWrap: 'nowrap', gap: 2, justifyContent: 'flex-end' }}>
-                {it.entity_type !== 'text' && it.entity_id && <QuickRate type={it.entity_type} id={it.entity_id} />}
+                {it.entity_type !== 'text' && it.entity_type !== 'list' && it.entity_id && <QuickRate type={it.entity_type} id={it.entity_id} />}
                 <button className="btn sm ghost" aria-label="Remove" onClick={async () => { await remove('list_items', [it.id]); }}>✕</button>
               </div>
             </li>)}</SortableItem>);

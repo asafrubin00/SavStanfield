@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { SortSelect, usePref } from '../components/controls';
-import { CoverGrid, CoverPicker, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useSaveOrder } from '../components/ListBits';
+import { CoverGrid, CoverPicker, FolderSelect, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useSaveOrder } from '../components/ListBits';
 import { Cover, fmtMs, QuickRate } from '../components/ui';
 import { adapter } from '../lib/db';
 import { player, trackEmbed, usePlayer } from '../lib/player';
@@ -25,6 +25,7 @@ export default function PlaylistView({ list: l }: { list: List }) {
   const ps = usePlayer();
   const items = useMemo(() => orderItems(ix, l, (ix.itemsByList.get(l.id) ?? []).filter((i) => i.entity_type === 'track')), [ix, l]);
   const saveOrder = useSaveOrder();
+  const deleteList = useDeleteList();
   useEffect(() => { void st.loadTracks(items.map((i) => i.entity_id!).filter(Boolean)); }, [items.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const [sort, setSort] = useState('order');
   const [view, setView] = usePref(`list.view.${l.id}`, 'songs');
@@ -76,12 +77,13 @@ export default function PlaylistView({ list: l }: { list: List }) {
         <button className="btn primary" disabled={!ids.length} onClick={() => player.play(ids, 0, l.name)}>Play</button>
         <button className="btn" disabled={!ids.length} onClick={() => player.shuffle(ids, l.name)}>Shuffle</button>
         <div className="seg" role="group" aria-label="View"><button className={view !== 'albums' ? 'on' : ''} onClick={() => setView('songs')}>Songs</button><button className={view === 'albums' ? 'on' : ''} onClick={() => setView('albums')}>Albums</button></div>
+        <FolderSelect list={l} />
         <SortSelect value={sort} onChange={setSort} options={[['order', l.custom_order ? 'Your order' : 'Your order (newest first)'], ['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['length', 'Length'], ['rating', 'Your rating'], ['newest', 'Newest release']]} />
         {!canDrag && rows.length > 1 && <span className="small muted">Switch to “Your order” to drag songs around</span>}
         <span className="spacer" />
         <button className="btn" disabled={!rows.length} onClick={exportCsv} title="Spreadsheet with Apple Music links">Export CSV</button>
         <button className="btn" disabled={!rows.length} onClick={exportTxt} title="“Artist - Title” lines — paste into TuneMyMusic or Soundiiz to recreate it in Apple Music">Export text</button>
-        <button className="btn danger" onClick={async () => { if (confirm(`Delete the playlist “${l.name}”? The songs stay in your library.`)) { await remove('list_items', (ix.itemsByList.get(l.id) ?? []).map((i) => i.id)); await remove('lists', [l.id]); nav('/lists'); } }}>Delete</button>
+        <button className="btn danger" onClick={async () => { if (confirm(`Delete the playlist “${l.name}”? The songs stay in your library.`)) { await deleteList(l); nav('/lists'); } }}>Delete</button>
       </div>
 
       <div className="search" style={{ maxWidth: 620, marginBottom: 18 }}>
