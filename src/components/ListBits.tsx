@@ -46,35 +46,43 @@ async function shrink(file: Blob, max = 700): Promise<string> {
 
 export function CoverPicker({ list, items, onClose }: { list: List; items: ListItem[]; onClose: () => void }) {
   const { ix, upsert, say } = useStore();
-  const [url, setUrl] = useState('');
-  const [busy, setBusy] = useState(false);
-  const needsSql = missingColumns.has('lists.cover_url');
   const choices = [...new Set(items.flatMap((it) => {
     const id = it.entity_id ?? '';
     const r = it.entity_type === 'release' ? ix.releases.get(id) : it.entity_type === 'track' ? ix.releases.get(ix.tracks.get(id)?.release_id ?? '') : undefined;
     return r?.artwork_url ? [r.artwork_url] : it.entity_type === 'artist' && ix.artists.get(id)?.image_url ? [ix.artists.get(id)!.image_url!] : [];
   }))].slice(0, 24);
-  const set = async (cover_url: string | null) => { await upsert('lists', [{ ...list, cover_url, updated_at: now() }]); say(cover_url ? 'Cover updated' : 'Back to the automatic cover'); onClose(); };
-  const fromFile = async (f?: Blob | null) => { if (!f) return; setBusy(true); try { await set(await shrink(f)); } catch { say('Couldn’t read that image'); } finally { setBusy(false); } };
+  return <ImagePicker title="Cover" choices={choices} choicesLabel="Or pick one from this list" onClose={onClose}
+    notice={missingColumns.has('lists.cover_url') ? <>Custom covers need a one-time database update: run <code>supabase/005-list-order.sql</code> in Supabase’s SQL Editor, then reload.</> : undefined}
+    resetLabel={list.cover_url ? 'Use automatic cover' : undefined}
+    onSet={async (cover_url) => { await upsert('lists', [{ ...list, cover_url, updated_at: now() }]); say(cover_url ? 'Cover updated' : 'Back to the automatic cover'); }} />;
+}
+
+/** Choose an image: upload, paste (⌘V), a URL, or one of some suggestions. Uploaded/pasted images are stored resized. */
+export function ImagePicker({ title, onSet, onClose, choices = [], choicesLabel, notice, resetLabel }: { title: string; onSet: (url: string | null) => Promise<void>; onClose: () => void; choices?: string[]; choicesLabel?: string; notice?: ReactNode; resetLabel?: string }) {
+  const { say } = useStore();
+  const [url, setUrl] = useState('');
+  const [busy, setBusy] = useState(false);
+  const set = async (u: string | null) => { setBusy(true); try { await onSet(u); onClose(); } finally { setBusy(false); } };
+  const fromFile = async (f?: Blob | null) => { if (!f) return; setBusy(true); try { await onSet(await shrink(f)); onClose(); } catch { say('Couldn’t read that image'); } finally { setBusy(false); } };
   return (
-    <Modal title="Cover" onClose={onClose}>
+    <Modal title={title} onClose={onClose}>
       <div onPaste={(e) => { const f = [...e.clipboardData.items].find((i) => i.type.startsWith('image/'))?.getAsFile(); if (f) { e.preventDefault(); void fromFile(f); } }}>
-        {needsSql && <div className="panel" style={{ marginBottom: 12, borderColor: 'var(--accent)' }}>Custom covers need a one-time database update: run <code>supabase/005-list-order.sql</code> in Supabase’s SQL Editor, then reload.</div>}
+        {notice && <div className="panel" style={{ marginBottom: 12, borderColor: 'var(--accent)' }}>{notice}</div>}
         <div className="row" style={{ marginBottom: 12 }}>
           <label className="btn primary">Upload an image<input type="file" accept="image/*" hidden onChange={(e) => void fromFile(e.target.files?.[0])} /></label>
-          <span className="small muted">or paste an image here (⌘V)</span>
+          <span className="small muted">or copy an image anywhere (right-click → Copy Image) and paste it here with ⌘V</span>
         </div>
         <form className="row" style={{ marginBottom: 16, flexWrap: 'nowrap' }} onSubmit={(e) => { e.preventDefault(); if (/^https?:\/\//.test(url.trim())) void set(url.trim()); }}>
           <input className="input" style={{ flex: 1 }} placeholder="…or an image URL" value={url} onChange={(e) => setUrl(e.target.value)} />
           <button className="btn" disabled={!/^https?:\/\//.test(url.trim())}>Use</button>
         </form>
         {choices.length > 0 && <>
-          <div className="label">Or pick one from this list</div>
+          {choicesLabel && <div className="label">{choicesLabel}</div>}
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(72px, 1fr))', gap: 6, marginBottom: 16 }}>
             {choices.map((c) => <button key={c} type="button" style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', aspectRatio: '1' }} onClick={() => void set(c)}><img src={c} alt="" loading="lazy" style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 4 }} /></button>)}
           </div>
         </>}
-        <div className="row"><span className="spacer" />{busy && <span className="small muted">Saving…</span>}{list.cover_url && <button className="btn" onClick={() => void set(null)}>Use automatic cover</button>}<button className="btn" onClick={onClose}>Close</button></div>
+        <div className="row"><span className="spacer" />{busy && <span className="small muted">Saving…</span>}{resetLabel && <button className="btn" onClick={() => void set(null)}>{resetLabel}</button>}<button className="btn" onClick={onClose}>Close</button></div>
       </div>
     </Modal>
   );

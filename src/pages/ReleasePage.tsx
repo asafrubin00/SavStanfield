@@ -12,6 +12,7 @@ import {
 } from '../lib/sources';
 import { norm, releaseArtists, releaseLabels, trackArtists, useStore } from '../lib/store';
 import PeopleInput from '../components/PeopleInput';
+import { ImagePicker } from '../components/ListBits';
 import { songFeatures } from '../lib/features';
 import { RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
@@ -27,6 +28,7 @@ export default function ReleasePage() {
   const [matching, setMatching] = useState(false);
   const [choosing, setChoosing] = useState(false);
   const [editTracks, setEditTracks] = useState(false);
+  const [pickingArt, setPickingArt] = useState(false);
   const [busy, setBusy] = useState('');
   const [embed, setEmbed] = useState<'apple' | 'youtube' | 'soundcloud' | null>(null);
   const [yt, setYt] = useState<Awaited<ReturnType<typeof youtubeSearch>> | null>(null);
@@ -139,7 +141,9 @@ export default function ReleasePage() {
   return (
     <div>
       <div className="hero">
-        <Cover src={r.artwork_url} title={r.title} eager />
+        <button type="button" className="list-cover" title="Change cover" onClick={() => setPickingArt(true)} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', display: 'block', width: '100%' }}>
+          <Cover src={r.artwork_url} title={r.title} eager /><span className="list-cover-edit">Change cover</span>
+        </button>
         <div>
           <div className="muted" style={{ marginBottom: 8 }}>{r.type}</div>
           <h1 className="hero-title">{r.title}</h1>
@@ -238,6 +242,8 @@ export default function ReleasePage() {
 
       {editLinks && <LinksEditor links={r.links} onClose={() => setEditLinks(false)} onSave={(links) => void saveLinks(links)} />}
       {editing && <ReleaseForm release={r} onClose={() => setEditing(false)} />}
+      {pickingArt && <ImagePicker title="Cover" onClose={() => setPickingArt(false)} resetLabel={r.artwork_url ? 'Remove cover' : undefined}
+        onSet={async (u) => { await save({ artwork_url: u, ext: { ...r.ext, art_manual: u ? now() : undefined } }); say(u ? 'Cover updated' : 'Cover removed'); }} />}
       {choosing && <TracklistChooser release={r} hasTracks={tracks.length > 0} onClose={() => setChoosing(false)} onAppleSearch={() => { setChoosing(false); void fetchTracks(); }} />}
       {matching && <MatchWizard release={r} artistName={artistName} onClose={() => setMatching(false)} />}
     </div>
@@ -393,6 +399,39 @@ function TracklistEditor({ release, tracks, onClose }: { release: Release; track
   );
 }
 
+/** Turn pasted text ("1. No Safe Corners", "02 - Rhyme Scheme 3:12", …) into songs: numbering and bullets stripped, lengths kept. */
+export function parseTracklist(text: string): SourceTrack[] {
+  const lines = text.split(/\r?\n/).map((l) => l.replace(/^\s*[-–•*]\s+/, '').trim()).filter(Boolean);
+  const numbered = lines.filter((l) => /^\d{1,3}\s*[.)\-:]?\s+\S/.test(l)).length >= Math.max(1, lines.length * 0.6);
+  const out: SourceTrack[] = [];
+  for (const l of lines) {
+    // "3. Title", "03 - Title", "3) Title" always count as numbering; a bare "3 Title" only when 3 is the next number (so "16 Chapels" survives)
+    const bare = l.match(/^(\d{1,3})\s+\S/);
+    let t = !numbered ? l : /^\d{1,3}\s*[.)\-:]\s*/.test(l) ? l.replace(/^\d{1,3}\s*[.)\-:]\s*/, '') : bare && Number(bare[1]) === out.length + 1 ? l.replace(/^\d{1,3}\s+/, '') : l;
+    let ms: number | null = null;
+    const m = t.match(/\s*[-–(]?\s*(\d{1,2}):(\d{2})\)?\s*$/);
+    if (m && m.index! > 0) { ms = (+m[1] * 60 + +m[2]) * 1000; t = t.slice(0, m.index).trim(); }
+    t = t.replace(/^["“]|["”]$/g, '').trim();
+    if (t) out.push({ title: t, number: out.length + 1, disc: null, ms, links: {}, ext: { pasted: true } });
+  }
+  return out;
+}
+
+function PasteTracklist({ onUse, saving }: { onUse: (t: SourceTrack[]) => void; saving: boolean }) {
+  const [text, setText] = useState('');
+  const tracks = useMemo(() => parseTracklist(text), [text]);
+  return (
+    <div className="panel" style={{ marginBottom: 10, padding: 12 }}>
+      <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'nowrap' }}>
+        <div><strong>Paste a tracklist</strong> <span className="muted small">{tracks.length ? `${tracks.length} songs` : 'e.g. copied from AOTY or Wikipedia, one song per line'}</span></div>
+        <button className="btn sm primary" disabled={!tracks.length || saving} onClick={() => onUse(tracks)}>{saving ? 'Saving…' : 'Use this'}</button>
+      </div>
+      <textarea className="textarea" style={{ marginTop: 8, minHeight: 110 }} placeholder={'1. No Safe Corners\n2. Rhyme Scheme\n3. Steppin’ With The Steppers'} value={text} onChange={(e) => setText(e.target.value)} />
+      {tracks.length > 0 && <div className="small muted" style={{ marginTop: 6 }}>{tracks.slice(0, 6).map((t) => t.title).join(' · ')}{tracks.length > 6 ? ' …' : ''}</div>}
+    </div>
+  );
+}
+
 /** Pick the tracklist source: each linked source is fetched and shown with its track count first. */
 function TracklistChooser({ release, hasTracks, onClose, onAppleSearch }: { release: Release; hasTracks: boolean; onClose: () => void; onAppleSearch: () => void }) {
   const st = useStore();
@@ -425,6 +464,7 @@ function TracklistChooser({ release, hasTracks, onClose, onAppleSearch }: { rele
           </div>
           {Array.isArray(v) && <div className="small muted" style={{ marginTop: 6 }}>{v.slice(0, 6).map((t) => t.title).join(' · ')}{v.length > 6 ? ' …' : ''}</div>}
         </div>); })}
+      <PasteTracklist onUse={(tracks) => use('Pasted', tracks)} saving={saving === 'Pasted'} />
       {!release.ext.apple_id && <div className="panel" style={{ padding: 12 }}><div className="row" style={{ justifyContent: 'space-between' }}><span><strong>Apple Music</strong> <span className="muted small">not linked yet</span></span><button className="btn sm" onClick={onAppleSearch}>Search Apple Music</button></div></div>}
       {!sources.length && <div className="small muted" style={{ marginTop: 8 }}>No linked sources yet — add a Wikipedia, Deezer or MusicBrainz link with Edit links.</div>}
     </Modal>
