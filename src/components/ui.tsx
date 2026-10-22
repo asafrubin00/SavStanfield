@@ -14,7 +14,7 @@ export function Cover({ src, title, round, size, eager }: { src?: string | null;
   return (
     <div className={`cover${round ? ' avatar' : ''}`} style={style}>
       {src && !broken
-        ? <img src={src} alt="" loading={eager ? 'eager' : 'lazy'} onError={() => setBroken(true)} />
+        ? <img src={src} alt="" loading={eager ? 'eager' : 'lazy'} referrerPolicy="no-referrer" onError={() => setBroken(true)} />
         : <div className="ph" style={{ background: `linear-gradient(160deg, hsl(${h} 32% 42%), hsl(${(h + 40) % 360} 38% 22%))`, fontSize: size && size < 60 ? 10 : undefined }}>{size && size < 60 ? '' : title}</div>}
     </div>
   );
