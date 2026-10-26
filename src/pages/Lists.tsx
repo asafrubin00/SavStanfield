@@ -5,7 +5,7 @@ import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordi
 import { SortSelect, usePref } from '../components/controls';
 import { Cover, QuickRate } from '../components/ui';
 import PlaylistView from './Playlist';
-import { CoverGrid, CoverPicker, FolderSelect, folderOfMap, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useMoveToFolder, useSaveOrder } from '../components/ListBits';
+import { CoverGrid, CoverPicker, FolderSelect, folderOfMap, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useMoveToFolder, useRemoveFromList, useSaveOrder } from '../components/ListBits';
 import { norm, useStore, type Index } from '../lib/store';
 import type { List, ListItem } from '../lib/types';
 import { now, uid } from '../lib/util';
@@ -153,6 +153,7 @@ export default function ListPage() {
   const items = useMemo(() => (l0 ? orderItems(ix, l0, ix.itemsByList.get(id!) ?? []) : []), [ix, id, l0]);
   const saveOrder = useSaveOrder();
   const deleteList = useDeleteList();
+  const removeItems = useRemoveFromList();
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('');
   const [itemSort, setItemSort] = useState('order');
@@ -220,7 +221,7 @@ export default function ListPage() {
         </div>}
       </div>
       {!items.length ? <div className="empty">This list is empty. Search above, or use “Add to list” on any page.</div> : view === 'covers' ? (
-        <CoverGrid groups={groupForCovers(ix, shownItems, l.ranked ? new Map(items.map((it, i) => [it.id, i + 1])) : undefined)} label={l.name} onReorder={canMove ? (ids) => void saveOrder(l, ids) : undefined} />
+        <CoverGrid groups={groupForCovers(ix, shownItems, l.ranked ? new Map(items.map((it, i) => [it.id, i + 1])) : undefined)} label={l.name} onReorder={canMove ? (ids) => void saveOrder(l, ids) : undefined} onRemove={(ids, title) => void removeItems(ids, title, false)} />
       ) : (
         <Sortable ids={shownItems.map((it) => it.id)} onReorder={(ids) => void saveOrder(l, ids)}><ol style={{ listStyle: 'none', padding: 0, margin: 0 }}>{shownItems.map((it) => {
           const i = items.indexOf(it); const v = itemView(ix, it);

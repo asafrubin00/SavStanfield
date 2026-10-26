@@ -60,7 +60,7 @@ export { norm, annId };
 
 interface Store {
   data: DataSet; ix: Index; loading: boolean; error: string | null;
-  toast: string | null; say(msg: string): void;
+  toast: string | null; toastAction: { label: string; run: () => void } | null; say(msg: string, action?: { label: string; run: () => void }): void;
   upsert<T extends TableName>(table: T, rows: Tables[T][]): Promise<void>;
   remove(table: TableName, ids: string[]): Promise<void>;
   replaceAll(d: DataSet): Promise<void>;
@@ -103,14 +103,15 @@ export function StoreProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [toastAction, setToastAction] = useState<{ label: string; run: () => void } | null>(null);
   const dataRef = useRef(data);
   dataRef.current = data;
   const timer = useRef<number>();
 
-  const say = useCallback((msg: string) => {
-    setToast(msg);
+  const say = useCallback((msg: string, action?: { label: string; run: () => void }) => {
+    setToast(msg); setToastAction(action ?? null);
     window.clearTimeout(timer.current);
-    timer.current = window.setTimeout(() => setToast(null), 3200);
+    timer.current = window.setTimeout(() => { setToast(null); setToastAction(null); }, action ? 6000 : 3200);
   }, []);
 
   useEffect(() => {
@@ -398,7 +399,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return add.length;
   }, [upsert, say]);
 
-  const value: Store = { data, ix, loading, error, toast, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList, replaceTracklist, refreshLabels, setTrackCredits, pruneArtists, linkFeatures, findFeaturesFor };
+  const value: Store = { data, ix, loading, error, toast, toastAction, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList, replaceTracklist, refreshLabels, setTrackCredits, pruneArtists, linkFeatures, findFeaturesFor };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

@@ -95,7 +95,7 @@ function QueueStatus() {
 }
 
 function Shell() {
-  const { data, ix, loading, error, toast, upsert, setReleaseLabels, saveTracksQuiet, replaceTracklist, refreshLabels } = useStore();
+  const { data, ix, loading, error, toast, toastAction, say, upsert, setReleaseLabels, saveTracksQuiet, replaceTracklist, refreshLabels } = useStore();
   const [menu, setMenu] = useState(false);
   const loc = useLocation();
   useEffect(() => { setMenu(false); window.scrollTo(0, 0); }, [loc.pathname]);
@@ -163,7 +163,7 @@ function Shell() {
         </main>
       </div>
       <Player />
-      {toast && <div className="toast" role="status" style={playerOpen ? { bottom: 250 } : undefined}>{toast}</div>}
+      {toast && <div className="toast" role="status" style={playerOpen ? { bottom: 250 } : undefined}>{toast}{toastAction && <button type="button" className="btn sm" style={{ marginLeft: 12 }} onClick={() => { toastAction.run(); say('Undone'); }}>{toastAction.label}</button>}</div>}
     </div>
   );
 }

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { SortSelect, usePref } from '../components/controls';
-import { CoverGrid, CoverPicker, FolderSelect, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useSaveOrder } from '../components/ListBits';
+import { CoverGrid, CoverPicker, FolderSelect, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useRemoveFromList, useSaveOrder } from '../components/ListBits';
 import { Cover, fmtMs, QuickRate } from '../components/ui';
 import { adapter } from '../lib/db';
 import { player, trackEmbed, usePlayer } from '../lib/player';
@@ -26,6 +26,7 @@ export default function PlaylistView({ list: l }: { list: List }) {
   const items = useMemo(() => orderItems(ix, l, (ix.itemsByList.get(l.id) ?? []).filter((i) => i.entity_type === 'track')), [ix, l]);
   const saveOrder = useSaveOrder();
   const deleteList = useDeleteList();
+  const removeItems = useRemoveFromList();
   useEffect(() => { void st.loadTracks(items.map((i) => i.entity_id!).filter(Boolean)); }, [items.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const [sort, setSort] = useState('order');
   const [view, setView] = usePref(`list.view.${l.id}`, 'songs');
@@ -112,7 +113,7 @@ export default function PlaylistView({ list: l }: { list: List }) {
 
       {picking && <CoverPicker list={l} items={items} onClose={() => setPicking(false)} />}
       {!rows.length ? <div className="empty">No songs yet. Search above, or use “+ Playlist” on any album’s tracklist.</div> : view === 'albums' ? (
-        <CoverGrid groups={groupForCovers(ix, shown.map((x) => x.it))} label={l.name} onReorder={canDrag ? (ids) => void saveOrder(l, ids) : undefined} />
+        <CoverGrid groups={groupForCovers(ix, shown.map((x) => x.it))} label={l.name} onReorder={canDrag ? (ids) => void saveOrder(l, ids) : undefined} onRemove={(ids, title) => void removeItems(ids, title, true)} />
       ) : (
         <div className="table-wrap"><table className="table">
           <thead><tr>{canDrag && <th style={{ width: 28 }} />}<th style={{ width: 36 }}>#</th><th className="thumb" /><th>Title</th><th>Album</th><th style={{ textAlign: 'right' }}>Length</th><th /><th /></tr></thead>

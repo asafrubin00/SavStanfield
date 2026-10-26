@@ -114,7 +114,7 @@ export function groupForCovers(ix: Index, items: ListItem[], ranks?: Map<string,
   return [...groups.values()];
 }
 
-export function CoverGrid({ groups, label, extra, onReorder }: { groups: Group[]; label: string; extra?: (g: Group) => ReactNode; onReorder?: (itemIds: string[]) => void }) {
+export function CoverGrid({ groups, label, extra, onReorder, onRemove }: { groups: Group[]; label: string; extra?: (g: Group) => ReactNode; onReorder?: (itemIds: string[]) => void; onRemove?: (itemIds: string[], title: string) => void }) {
   const ids = groups.map((g) => g.key);
   const grid = (
     <div className="grid">{groups.map((g) => (
@@ -122,6 +122,7 @@ export function CoverGrid({ groups, label, extra, onReorder }: { groups: Group[]
       <div ref={ref} style={style} className="tile">
         <div className="tile-cover">
           {onReorder && <span className="tile-handle">{handle}</span>}
+          {onRemove && <button type="button" className="tile-remove" aria-label={`Remove ${g.title} from this list`} title="Remove from this list" onClick={() => onRemove(g.itemIds, g.title)}>×</button>}
           {g.to ? <Link to={g.to} style={{ display: 'block' }}><Cover src={g.img} title={g.title} round={g.round} /></Link> : <Cover src={g.img} title={g.title} />}
           {g.rate && !g.round && <TileRate type={g.rate.type} id={g.rate.id} />}
           {g.rank && <span className="tile-rank">{g.rank}</span>}
@@ -233,5 +234,17 @@ export function useDeleteList() {
   return async (list: List) => {
     await remove('list_items', [...(ix.itemsByList.get(list.id) ?? []).map((i) => i.id), ...data.list_items.filter((i) => i.entity_type === 'list' && i.entity_id === list.id).map((i) => i.id)]);
     await remove('lists', [list.id]);
+  };
+}
+
+/** Take items off a list (from a cover tile): confirms when it's several songs, and offers Undo. */
+export function useRemoveFromList() {
+  const { ix, upsert, remove, say } = useStore();
+  return async (itemIds: string[], title: string, songs: boolean) => {
+    if (itemIds.length > 1 && !confirm(`Remove ${itemIds.length} ${songs ? 'songs' : 'items'} from “${title}”?`)) return;
+    const all = [...ix.itemsByList.values()].flat();
+    const removed = all.filter((i) => itemIds.includes(i.id));
+    await remove('list_items', itemIds);
+    say(`Removed ${itemIds.length > 1 ? `${itemIds.length} ${songs ? 'songs' : 'items'} from ` : ''}“${title}”`, { label: 'Undo', run: () => void upsert('list_items', removed) });
   };
 }
