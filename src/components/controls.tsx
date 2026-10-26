@@ -42,11 +42,20 @@ export function RatingSelect({ value, onChange, label = 'Rating' }: { value: str
   );
 }
 
-export function SortSelect({ value, options, onChange }: { value: string; options: [string, string][]; onChange: (v: string) => void }) {
+/** Which way a sort runs by default: A–Z, oldest-first and "your order" go up; everything else (newest, highest, most) goes down. */
+const naturallyUp = (value: string, label: string) => /a–z|a-z|oldest|^az$|title|^order$|ranking|your order|playlist order|list order/i.test(`${value}|${label}`) && !/z–a/i.test(label);
+
+/** Sort dropdown, plus an arrow button to flip the direction when `onRev` is given. */
+export function SortSelect({ value, options, onChange, rev, onRev }: { value: string; options: [string, string][]; onChange: (v: string) => void; rev?: boolean; onRev?: (rev: boolean) => void }) {
+  const label = options.find(([v]) => v === value)?.[1] ?? '';
+  const up = naturallyUp(value, label) !== !!rev;
   return (
-    <select className="select" value={value} onChange={(e) => onChange(e.target.value)} aria-label="Sort">
-      {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-    </select>
+    <span className="row" style={{ gap: 4, flexWrap: 'nowrap' }}>
+      <select className="select" value={value} onChange={(e) => onChange(e.target.value)} aria-label="Sort">
+        {options.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+      </select>
+      {onRev && <button type="button" className={`btn sort-dir${rev ? ' on' : ''}`} onClick={() => onRev(!rev)} aria-label={`Sorted ${up ? 'ascending' : 'descending'} — click to flip`} title={`${up ? 'Ascending' : 'Descending'} — click to flip`}>{up ? '↑' : '↓'}</button>}
+    </span>
   );
 }
 
@@ -80,4 +89,10 @@ export function MultiSelect({ label, options, value, onChange, counts }: { label
       )}
     </div>
   );
+}
+
+/** Flip a sorted list when `rev` is on, keeping items with nothing to sort by (unrated, undated) at the end. */
+export function flip<T>(arr: T[], rev: boolean, has: (x: T) => boolean = () => true): T[] {
+  if (!rev) return arr;
+  return [...arr.filter(has).reverse(), ...arr.filter((x) => !has(x))];
 }

@@ -2,8 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { DndContext, KeyboardSensor, PointerSensor, pointerWithin, TouchSensor, useDroppable, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordinates } from '@dnd-kit/sortable';
-import { SortSelect, usePref } from '../components/controls';
-import { Cover, QuickRate } from '../components/ui';
+import { SortSelect, usePref, flip } from '../components/controls';
+import { Cover, fmtDate, QuickRate } from '../components/ui';
 import PlaylistView from './Playlist';
 import { CoverGrid, CoverPicker, FolderSelect, folderOfMap, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useMoveToFolder, useRemoveFromList, useSaveOrder } from '../components/ListBits';
 import { norm, useStore, type Index } from '../lib/store';
@@ -51,6 +51,9 @@ export function Lists() {
   const [show, setShow] = usePref('lists.show', 'all');
   const [sortTop, setSortTop] = usePref('lists.sort', 'updated');
   const [sortFolder, setSortFolder] = usePref('lists.sort.folder', 'order');
+  const [listRev, setListRev] = useState(false);
+  const [lq, setLq] = useState('');
+  const [listView, setListView] = usePref('lists.view', 'grid');
   const folders = useMemo(() => data.lists.filter((l) => l.kind === 'folder').sort((a, b) => a.name.localeCompare(b.name)), [data.lists]);
   const folder = folders.find((f) => f.id === sel);
   const parent = useMemo(() => folderOfMap(ix, data.lists), [ix, data.lists]);
@@ -59,11 +62,21 @@ export function Lists() {
   const setSort = folder ? setSortFolder : setSortTop;
   const size = (id: string) => ix.itemsByList.get(id)?.length ?? 0;
   const inFolderPos = new Map((folder ? ix.itemsByList.get(folder.id) ?? [] : []).map((i) => [i.entity_id ?? '', i]));
-  const lists = all.filter((l) => (sel === 'all' || (sel === 'unfiled' ? !parent.has(l.id) : parent.get(l.id) === sel)) && (show === 'all' || (l.kind ?? 'list') === show))
+  // Search matches a list's name or description, or anything in it (an artist, album or song)
+  const nq = norm(lq);
+  const hit = (l: List): string | null => {
+    if (!nq) return '';
+    if (norm(`${l.name} ${l.description ?? ''}`).includes(nq)) return '';
+    for (const it of ix.itemsByList.get(l.id) ?? []) { const v = itemView(ix, it); if (v && norm(`${v.title} ${v.sub}`).includes(nq)) return v.title; }
+    return null;
+  };
+  const hits = new Map(all.map((l) => [l.id, hit(l)]));
+  const lists0 = all.filter((l) => hits.get(l.id) !== null && (sel === 'all' || (sel === 'unfiled' ? !parent.has(l.id) : parent.get(l.id) === sel)) && (show === 'all' || (l.kind ?? 'list') === show))
     .sort(sort === 'order' ? (a, b) => (inFolderPos.get(a.id)?.position ?? 0) - (inFolderPos.get(b.id)?.position ?? 0)
       : sort === 'az' ? (a, b) => a.name.localeCompare(b.name) : sort === 'created' ? (a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? '')
         : sort === 'size' ? (a, b) => size(b.id) - size(a.id) : (a, b) => (b.updated_at ?? '').localeCompare(a.updated_at ?? ''));
-  const canReorder = !!folder && sort === 'order' && show === 'all';
+  const lists = flip(lists0, listRev);
+  const canReorder = !!folder && sort === 'order' && show === 'all' && !listRev && !nq;
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }), useSensor(TouchSensor, { activationConstraint: { delay: 180, tolerance: 6 } }), useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }));
   const onDragEnd = (e: DragEndEvent) => {
     const over = e.over ? String(e.over.id) : ''; const id = String(e.active.id);
@@ -119,10 +132,25 @@ export function Lists() {
             {picking && folder && <CoverPicker list={folder} items={[]} onClose={() => setPicking(false)} />}
             <div className="row" style={{ marginBottom: 16 }}>
               <div className="seg" role="group" aria-label="Show">{[['all', 'All'], ['list', 'Lists'], ['playlist', 'Playlists'], ['artists', 'Artists']].map(([v, t]) => <button key={v} className={show === v ? 'on' : ''} onClick={() => setShow(v)}>{t}</button>)}</div>
-              <SortSelect value={sort} onChange={setSort} options={[...(folder ? [['order', 'Your order'] as [string, string]] : []), ['updated', 'Recently changed'], ['created', 'Newest'], ['az', 'A–Z'], ['size', 'Biggest']]} />
-              <span className="muted">{lists.length}</span>
+              <input className="input" style={{ width: 240 }} placeholder="Search lists — or an artist, album, song in them" value={lq} onChange={(e) => setLq(e.target.value)} aria-label="Search lists" />
+              <SortSelect value={sort} onChange={(v) => { setSort(v); setListRev(false); }} rev={listRev} onRev={setListRev} options={[...(folder ? [['order', 'Your order'] as [string, string]] : []), ['updated', 'Recently changed'], ['created', 'Date created'], ['az', 'A–Z'], ['size', 'Size']]} />
+              <span className="muted">{lists.length}</span><span className="spacer" />
+              <div className="seg" role="group" aria-label="View"><button className={listView !== 'table' ? 'on' : ''} onClick={() => setListView('grid')}>Grid</button><button className={listView === 'table' ? 'on' : ''} onClick={() => setListView('table')}>Table</button></div>
             </div>
             {!lists.length ? <div className="empty">{folder ? 'This folder is empty. Drag lists onto it from “All lists”, or use the Folder menu on a list’s page.' : sel === 'unfiled' ? 'Everything is in a folder.' : 'No lists yet. Make one above, or use “Add to list” on any artist, release or song.'}</div> : (
+              listView === 'table' ? (
+              <div className="table-wrap"><table className="table">
+                <thead><tr><th className="thumb" /><th>Name</th><th>Type</th><th style={{ textAlign: 'right' }}>Items</th><th>Folder</th><th>Changed</th><th>Created</th></tr></thead>
+                <tbody>{lists.map((l) => (
+                  <tr key={l.id}><td><Link to={`/list/${l.id}`} style={{ display: 'block', width: 36 }}><ListCover list={l} /></Link></td>
+                    <td><Link to={`/list/${l.id}`} style={{ fontWeight: 600 }}>{l.name}</Link>{hits.get(l.id) ? <div className="small muted">contains {hits.get(l.id)}</div> : null}</td>
+                    <td className="muted">{l.kind === 'playlist' ? 'Playlist' : l.kind === 'artists' ? 'Artist list' : l.ranked ? 'Ranked list' : 'List'}</td>
+                    <td className="num" style={{ textAlign: 'right' }}>{size(l.id)}</td>
+                    <td className="small">{parent.get(l.id) ? <Link to={`/lists?folder=${parent.get(l.id)}`}>{ix.lists.get(parent.get(l.id)!)?.name}</Link> : ''}</td>
+                    <td className="num muted small">{l.updated_at ? fmtDate(l.updated_at.slice(0, 10)) : ''}</td>
+                    <td className="num muted small">{l.created_at ? fmtDate(l.created_at.slice(0, 10)) : ''}</td></tr>))}</tbody>
+              </table></div>
+              ) : (
               <SortableContext items={lists.map((l) => l.id)} strategy={canReorder ? rectSortingStrategy : () => null}>
                 <div className="grid">{lists.map((l) => (
                   <SortableItem key={l.id} id={l.id}>{({ ref, style, handle }) => (
@@ -132,10 +160,11 @@ export function Lists() {
                         <span className="tile-handle">{handle}</span>
                       </div>
                       <div className="t"><Link to={`/list/${l.id}`}>{l.name}</Link></div>
-                      <div className="s">{KIND_SUB(l, size(l.id))}{sel === 'all' && parent.get(l.id) ? ` · ${ix.lists.get(parent.get(l.id)!)?.name ?? ''}` : ''}</div>
+                      <div className="s">{hits.get(l.id) ? `contains ${hits.get(l.id)}` : <>{KIND_SUB(l, size(l.id))}{sel === 'all' && parent.get(l.id) ? ` · ${ix.lists.get(parent.get(l.id)!)?.name ?? ''}` : ''}</>}</div>
                     </div>)}</SortableItem>))}
                 </div>
               </SortableContext>
+              )
             )}
           </section>
         </div>
@@ -157,6 +186,7 @@ export default function ListPage() {
   const [q, setQ] = useState('');
   const [filter, setFilter] = useState('');
   const [itemSort, setItemSort] = useState('order');
+  const [itemRev, setItemRev] = useState(false);
   const [view, setView] = usePref(`list.view.${id}`, 'compact');
   const [picking, setPicking] = useState(false);
   const isArt = l0?.kind === 'artists';
@@ -182,11 +212,12 @@ export default function ListPage() {
   const day = (it: ListItem) => { if (it.entity_type === 'artist') return ix.lastByArtist.get(it.entity_id ?? '') ?? ''; const r = rel(it); return r?.date ?? (r?.year ? String(r.year) : ''); };
   const rt = (it: ListItem) => it.entity_id ? ix.ann.get(`${it.entity_type}:${it.entity_id}`)?.rating ?? 0 : 0;
   const ttl = (it: ListItem) => itemView(ix, it)?.title ?? '';
-  const sorted = itemSort === 'order' ? items : [...items].sort(
+  const sorted0 = itemSort === 'order' ? items : [...items].sort(
     itemSort === 'rating' ? (a, b) => rt(b) - rt(a) : itemSort === 'newest' ? (a, b) => day(b).localeCompare(day(a))
       : itemSort === 'oldest' ? (a, b) => (day(a) || '9999').localeCompare(day(b) || '9999') : (a, b) => ttl(a).localeCompare(ttl(b)));
+  const sorted = flip(sorted0, itemRev, (it) => (itemSort === 'rating' ? rt(it) > 0 : itemSort === 'newest' || itemSort === 'oldest' ? !!day(it) : true));
   const shownItems = sorted.filter((it) => !fn || norm(`${itemView(ix, it)?.title} ${itemView(ix, it)?.sub} ${it.note ?? ''}`).includes(fn));
-  const canMove = itemSort === 'order' && !fn;
+  const canMove = itemSort === 'order' && !fn && !itemRev;
 
   return (
     <div>
@@ -202,7 +233,7 @@ export default function ListPage() {
       <div className="row" style={{ margin: '16px 0 22px' }}>
         <FolderSelect list={l} />
         <label className="row"><input type="checkbox" checked={l.ranked} onChange={(e) => upsert('lists', [{ ...l, ranked: e.target.checked }])} /> Ranked</label>
-        <SortSelect value={itemSort} onChange={setItemSort} options={isArt
+        <SortSelect value={itemSort} onChange={(v) => { setItemSort(v); setItemRev(false); }} rev={itemRev} onRev={setItemRev} options={isArt
           ? [['order', l.ranked ? 'Ranking' : l.custom_order ? 'Your order' : 'Your order (latest release first)'], ['rating', 'Your rating'], ['newest', 'Latest release'], ['title', 'A–Z']]
           : [['order', l.ranked ? 'Ranking' : l.custom_order ? 'Your order' : 'Your order (newest first)'], ['rating', 'Your rating'], ['newest', 'Newest first'], ['oldest', 'Oldest first'], ['title', 'A–Z']]} />
         <div className="seg" role="group" aria-label="View">{[['compact', 'List view'], ['covers', isArt ? 'Grid view' : 'Album view']].map(([v, t]) => <button key={v} className={(view === 'covers') === (v === 'covers') ? 'on' : ''} onClick={() => setView(v)}>{t}</button>)}</div>

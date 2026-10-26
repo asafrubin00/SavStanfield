@@ -5,7 +5,7 @@ import { autoLinkArtist } from '../lib/enrich';
 import { parseArtistCredit } from '../lib/importSheet';
 import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists, type AppleAlbum, type MBGroup } from '../lib/sources';
 import { artistLabels, norm, shownInArtists, trackArtists, useStore } from '../lib/store';
-import { SortSelect, usePref } from '../components/controls';
+import { SortSelect, usePref, flip } from '../components/controls';
 import { type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
 import { linkQueue } from '../lib/queue';
@@ -29,9 +29,11 @@ export default function ArtistPage() {
   const [disco, setDisco] = useState(false);
   const [featBusy, setFeatBusy] = useState(false);
   const [moreOpen, setMoreOpen] = usePref('artist.moreOpen', false);
+  const splitNames = (ix.artists.get(id!)?.name ?? '').split(/\s*(?:&|,|\bx\b|\band\b|\bfeat\.?|\bft\.?|\bwith\b)\s*/i).map((s) => s.trim()).filter(Boolean);
   const [merging, setMerging] = useState(false);
   const [bioOpen, setBioOpen] = useState(false);
   const [discSort, setDiscSort] = usePref('artist.discSort', 'newest');
+  const [discRev, setDiscRev] = usePref('artist.discRev', false);
   const [grouped, setGrouped] = usePref('artist.grouped', true);
   const [showCounts, setShowCounts] = usePref('artists.showCounts', false);
 
@@ -61,7 +63,7 @@ export default function ArtistPage() {
     newest: (x, y) => day(y).localeCompare(day(x)), oldest: (x, y) => day(x).localeCompare(day(y)),
     rating: (x, y) => rt(y) - rt(x) || day(y).localeCompare(day(x)), title: (x, y) => x.title.localeCompare(y.title),
   };
-  const sorted = [...discog].sort(sorter[discSort] ?? sorter.newest);
+  const sorted = flip([...discog].sort(sorter[discSort] ?? sorter.newest), discRev, (r) => (discSort === 'rating' ? rt(r) > 0 : true));
   // Main sections in a fixed order; singles, leaks and guest appearances sit behind a reveal
   const sectionOf = (t: string) => SHOWN.find(([, ts]) => ts.includes(t))?.[0] ?? (HIDDEN.flatMap(([, ts]) => ts).includes(t) ? null : 'Other');
   const byType = new Map<string, Release[]>();
@@ -115,6 +117,11 @@ export default function ArtistPage() {
         <AddToList type="artist" id={a.id} />
         <button className="btn" onClick={() => setEditing(true)}>Edit</button>
         <button className="btn" onClick={() => setMerging(true)}>Merge…</button>
+        {splitNames.length > 1 && <button className="btn" title={`Credit everything to ${splitNames.join(' and ')} separately`} onClick={async () => {
+          if (!confirm(`Split “${a.name}” into ${splitNames.join(' + ')}? Everything credited to it goes to each of them, and this joint entry is removed.`)) return;
+          const parts = splitNames.map((n) => st.ensureArtist(n).artist);
+          await st.splitArtist(a, parts); st.say(`Split into ${splitNames.join(' + ')}`); nav(`/artist/${parts[0].id}`);
+        }}>Split…</button>}
         <select className="select" value={(a.ext.show_in_artists as string) ?? ''} onChange={(e) => void save({ ext: { ...a.ext, show_in_artists: e.target.value || undefined } })} aria-label="Show in Artists" title="Whether this person appears on the Artists page">
           <option value="">Artists page: auto ({shownInArtists(ix, { ...a, ext: { ...a.ext, show_in_artists: undefined } }) ? 'shown' : 'hidden'})</option><option value="always">Artists page: always</option><option value="never">Artists page: never</option></select>
         <button className="btn" disabled={featBusy} title="Looks for “feat. / ft. / with …” this artist in every song title" onClick={async () => { setFeatBusy(true); try { const n = await st.findFeaturesFor(a); st.say(n ? `Found ${n} new feature${n > 1 ? 's' : ''}` : 'No new features found'); } catch (e) { st.say((e as Error).message); } finally { setFeatBusy(false); } }}>{featBusy ? 'Searching…' : 'Find features'}</button>
@@ -125,7 +132,7 @@ export default function ArtistPage() {
         <div>
           {a.bio && <p style={{ maxWidth: '68ch', marginTop: 0 }}>{bioOpen || a.bio.length < 420 ? a.bio : `${a.bio.slice(0, 420)}… `}{a.bio.length >= 420 && <button className="btn sm ghost" onClick={() => setBioOpen(!bioOpen)}>{bioOpen ? 'Less' : 'More'}</button>}</p>}
           {discog.length > 0 && <div className="row" style={{ marginTop: 8 }}>
-            <SortSelect value={discSort} onChange={setDiscSort} options={[['newest', 'Newest first'], ['oldest', 'Oldest first'], ['rating', 'Your rating'], ['title', 'Title A–Z']]} />
+            <SortSelect value={discSort} onChange={(v) => { setDiscSort(v); setDiscRev(false); }} rev={discRev} onRev={setDiscRev} options={[['newest', 'Release date'], ['rating', 'Your rating'], ['title', 'Title A–Z']]} />
             <label className="row"><input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} /> Group by type</label>
             <label className="row"><input type="checkbox" checked={showCounts} onChange={(e) => setShowCounts(e.target.checked)} /> Show counts</label>
           </div>}
@@ -214,20 +221,12 @@ export function ArtistForm({ artist, onClose }: { artist?: Artist; onClose: () =
 }
 
 function MergeArtist({ artist, onClose }: { artist: Artist; onClose: () => void }) {
-  const { data, ix, upsert, remove, say } = useStore();
+  const { data, mergeArtists, say } = useStore();
   const nav = useNavigate();
   const [q, setQ] = useState('');
   const opts = q.length < 2 ? [] : data.artists.filter((x) => x.id !== artist.id && norm(x.name).includes(norm(q))).slice(0, 10);
   async function merge(into: Artist) {
-    const creds = (ix.creditsByArtist.get(artist.id) ?? []).map((c) => ({ ...c, artist_id: into.id }));
-    await upsert('credits', creds);
-    await upsert('artists', [{ ...into, aliases: [...new Set([...into.aliases, artist.name, ...artist.aliases])], is_producer: into.is_producer || artist.is_producer, links: { ...artist.links, ...into.links }, image_url: into.image_url ?? artist.image_url, updated_at: now() }]);
-    const ann = ix.ann.get(`artist:${artist.id}`);
-    if (ann && !ix.ann.get(`artist:${into.id}`)) await upsert('annotations', [{ ...ann, id: `artist:${into.id}`, entity_id: into.id }]);
-    await upsert('list_items', data.list_items.filter((i) => i.entity_id === artist.id).map((i) => ({ ...i, entity_id: into.id })));
-    await upsert('concerts', data.concerts.filter((c) => c.artist_id === artist.id).map((c) => ({ ...c, artist_id: into.id })));
-    if (ann) await remove('annotations', [ann.id]);
-    await remove('artists', [artist.id]);
+    await mergeArtists(artist, into);
     say(`Merged ${artist.name} into ${into.name}`); onClose(); nav(`/artist/${into.id}`);
   }
   return (

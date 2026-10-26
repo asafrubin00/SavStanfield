@@ -4,6 +4,7 @@ import { RatingSelect, ratingMatches, SortSelect, usePref } from '../components/
 import { ArtistTile, Cover, fmtDate, QuickRate } from '../components/ui';
 import type { Artist, Release } from '../lib/types';
 import { linkQueue } from '../lib/queue';
+import { usePageState } from '../lib/nav';
 import { norm, shownInArtists, useStore } from '../lib/store';
 import { ArtistForm } from './ArtistPage';
 
@@ -19,8 +20,11 @@ export default function Artists({ producers }: { producers: boolean }) {
   const rating = sp.get('rating') ?? '';
   const favOnly = sp.get('fav') === '1';
   const who = sp.get('who') ?? 'shown';
+  const rev = sp.get('rev') === '1';
+  /** Sort by a column; clicking the column you're already sorted by flips the direction. */
+  const sortBy = (k: string) => { const n = new URLSearchParams(sp); if ((sp.get('sort') ?? 'recent') === k) { if (rev) n.delete('rev'); else n.set('rev', '1'); } else { if (k === 'recent') n.delete('sort'); else n.set('sort', k); n.delete('rev'); } setSp(n, { replace: true }); };
   const set = (k: string, v: string | null) => { const n = new URLSearchParams(sp); if (v) n.set(k, v); else n.delete(k); setSp(n, { replace: true }); setShown(150); };
-  const [shown, setShown] = useState(150);
+  const [shown, setShown] = usePageState('shown', 150);
   const [adding, setAdding] = useState(false);
   const [showCounts, setShowCounts] = usePref('artists.showCounts', false);
   const [view, setView] = usePref('artists.view', 'grid');
@@ -28,7 +32,7 @@ export default function Artists({ producers }: { producers: boolean }) {
   const rows = useMemo(() => {
     const n = norm(q); const today = new Date().toISOString().slice(0, 10);
     const last = producers ? ix.lastProducedByArtist : ix.lastByArtist;
-    return data.artists
+    const out = data.artists
       .filter((a) => (!producers || a.is_producer) && (!n || norm([a.name, ...a.aliases].join(' ')).includes(n)))
       .filter((a) => producers || who === 'all' || shownInArtists(ix, a) === (who === 'shown'))
       .filter((a) => { const an = ix.ann.get(`artist:${a.id}`); return (!favOnly || an?.favorite) && ratingMatches(rating, an?.rating); })
@@ -58,8 +62,13 @@ export default function Artists({ producers }: { producers: boolean }) {
           case 'count': return y.count - x.count || az;
           default: return y.last.localeCompare(x.last) || az; // most recent release, ties A–Z
         }
-      });
-  }, [data.artists, ix, q, sort, rating, favOnly, producers, who]);
+      })
+;
+    if (!rev) return out;
+    // Flipped: reverse the ones that have a value, keep blanks (no releases, unrated) at the end
+    const has = (r: typeof out[0]) => (sort === 'avg' ? r.avg > 0 : sort === 'rating' ? r.mine > 0 : sort === 'count' ? r.count > 0 : sort === 'az' || sort === 'za' ? true : !!r.last);
+    return [...out.filter(has).reverse(), ...out.filter((r) => !has(r))];
+  }, [data.artists, ix, q, sort, rating, favOnly, producers, who, rev]);
   const setShow = (a: Artist, v: string) => upsert('artists', [{ ...a, ext: { ...a.ext, show_in_artists: v || undefined }, updated_at: new Date().toISOString() }]);
 
   const sub = (r: typeof rows[0]) => [
@@ -74,11 +83,12 @@ export default function Artists({ producers }: { producers: boolean }) {
       <div className="row" style={{ marginBottom: 20 }}>
         <h1 className="h-page">{producers ? 'Producers' : 'Artists'}</h1><span className="spacer" />
         {noPhoto.length > 0 && <button className="btn" onClick={() => { linkQueue.add('artist', noPhoto); say(`Looking up ${noPhoto.length} ${producers ? 'producers' : 'artists'} in the background`); }}>Get photos &amp; links for {noPhoto.length}</button>}
+        {!producers && <Link className="btn" to="/artists/tidy">Tidy duplicates</Link>}
         <button className="btn" onClick={() => setAdding(true)}>Add an artist</button>
       </div>
       <div className="row" style={{ marginBottom: 20 }}>
         <input className="input" style={{ width: 240 }} placeholder={`Filter ${producers ? 'producers' : 'artists'}`} value={q} onChange={(e) => set('q', e.target.value)} />
-        <SortSelect value={sort} options={PEOPLE_SORTS} onChange={(v) => set('sort', v === 'recent' ? null : v)} />
+        <SortSelect value={sort} options={PEOPLE_SORTS} onChange={(v) => { const n = new URLSearchParams(sp); if (v === 'recent') n.delete('sort'); else n.set('sort', v); n.delete('rev'); setSp(n, { replace: true }); }} rev={rev} onRev={(r) => set('rev', r ? '1' : null)} />
         <RatingSelect value={rating} onChange={(v) => set('rating', v)} label="Your rating of the artist" />
         <label className="row"><input type="checkbox" checked={favOnly} onChange={(e) => set('fav', e.target.checked ? '1' : null)} /> Favourites</label>
         {!producers && <select className="select" value={who} onChange={(e) => set('who', e.target.value === 'shown' ? null : e.target.value)} aria-label="Which artists" title="Hidden: people with no release of their own in your library (mostly producers), unless you've set them to Always">
@@ -91,11 +101,11 @@ export default function Artists({ producers }: { producers: boolean }) {
         view === 'table' ? (
           <div className="table-wrap"><table className="table">
             <thead><tr><th className="thumb" />
-              <th onClick={() => set('sort', sort === 'az' ? 'za' : 'az')} style={{ cursor: 'pointer' }}>Name{sort === 'az' ? ' ↑' : sort === 'za' ? ' ↓' : ''}</th>
-              <th onClick={() => set('sort', null)} style={{ cursor: 'pointer' }}>{producers ? 'Latest produced' : 'Latest release'}{sort === 'recent' ? ' ↓' : ''}</th>
-              <th onClick={() => set('sort', 'count')} style={{ cursor: 'pointer', textAlign: 'right' }}>{producers ? 'Produced' : 'Releases'}{sort === 'count' ? ' ↓' : ''}</th>
-              <th onClick={() => set('sort', 'avg')} style={{ cursor: 'pointer' }}>Your average{sort === 'avg' ? ' ↓' : ''}</th>
-              <th onClick={() => set('sort', 'rating')} style={{ cursor: 'pointer' }}>Rating{sort === 'rating' ? ' ↓' : ''}</th>
+              <th onClick={() => sortBy('az')} style={{ cursor: 'pointer' }}>Name{sort === 'az' ? (rev ? ' ↓' : ' ↑') : sort === 'za' ? ' ↓' : ''}</th>
+              <th onClick={() => sortBy('recent')} style={{ cursor: 'pointer' }}>{producers ? 'Latest produced' : 'Latest release'}{sort === 'recent' ? (rev ? ' ↑' : ' ↓') : ''}</th>
+              <th onClick={() => sortBy('count')} style={{ cursor: 'pointer', textAlign: 'right' }}>{producers ? 'Produced' : 'Releases'}{sort === 'count' ? (rev ? ' ↑' : ' ↓') : ''}</th>
+              <th onClick={() => sortBy('avg')} style={{ cursor: 'pointer' }}>Your average{sort === 'avg' ? (rev ? ' ↑' : ' ↓') : ''}</th>
+              <th onClick={() => sortBy('rating')} style={{ cursor: 'pointer' }}>Rating{sort === 'rating' ? (rev ? ' ↑' : ' ↓') : ''}</th>
               {!producers && <th title="Auto: shown if they have a release of their own in your library">Show in Artists</th>}</tr></thead>
             <tbody>{rows.slice(0, shown).map((r) => (
               <tr key={r.a.id}>

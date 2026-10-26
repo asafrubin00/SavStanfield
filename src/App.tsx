@@ -1,3 +1,5 @@
+import TidyArtists from './pages/TidyArtists';
+import { NavButtons, useScrollMemory } from './lib/nav';
 import { seedAppleArtist } from './lib/sources';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -98,7 +100,8 @@ function Shell() {
   const { data, ix, loading, error, toast, toastAction, say, upsert, setReleaseLabels, saveTracksQuiet, replaceTracklist, refreshLabels } = useStore();
   const [menu, setMenu] = useState(false);
   const loc = useLocation();
-  useEffect(() => { setMenu(false); window.scrollTo(0, 0); }, [loc.pathname]);
+  useEffect(() => { setMenu(false); }, [loc.pathname]);
+  useScrollMemory();
   useEffect(() => { for (const a of data.artists) seedAppleArtist(a.name, a.links.apple, a.ext.apple_id as number | undefined); }, [data.artists]);
   useEffect(() => {
     linkQueue.configure({
@@ -134,6 +137,7 @@ function Shell() {
       <div className="main">
         <header className="topbar">
           <button className="btn menu-btn" onClick={() => setMenu(true)} aria-label="Open menu">Menu</button>
+          <NavButtons />
           <GlobalSearch />
           <span className="spacer" />
           <QueueStatus />
@@ -145,6 +149,7 @@ function Shell() {
               <Route path="/" element={<Home />} />
               <Route path="/library" element={<Library />} />
               <Route path="/artists" element={<Artists producers={false} />} />
+              <Route path="/artists/tidy" element={<TidyArtists />} />
               <Route path="/producers" element={<Artists producers />} />
               <Route path="/artist/:id" element={<ArtistPage />} />
               <Route path="/release/:id" element={<ReleasePage />} />

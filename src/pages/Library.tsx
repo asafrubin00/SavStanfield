@@ -1,23 +1,28 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { MultiSelect, RatingSelect, ratingMatches } from '../components/controls';
+import { MultiSelect, RatingSelect, ratingMatches, SortSelect } from '../components/controls';
 import { Cover, Credits, QuickRate, ReleaseTile } from '../components/ui';
 import { norm, useStore } from '../lib/store';
 import { RELEASE_TYPES } from '../lib/types';
 import { ReleaseForm } from './ReleasePage';
+import { usePageState } from '../lib/nav';
 
 const PAGE = 120;
 
 export default function Library() {
   const { data, ix } = useStore();
   const [sp, setSp] = useSearchParams();
-  const [shown, setShown] = useState(PAGE);
+  const [shown, setShown] = usePageState('shown', PAGE);
   const [adding, setAdding] = useState(false);
   const get = (k: string) => sp.get(k) ?? '';
   const set = (k: string, v: string | null) => { const n = new URLSearchParams(sp); if (v) n.set(k, v); else n.delete(k); setSp(n, { replace: true }); setShown(PAGE); };
   const types = get('type') ? get('type').split(',') : [];
   const view = get('view') || 'grid';
   const sort = get('sort') || 'date-desc';
+  const rev = get('rev') === '1';
+  /** Click a column header to sort by it; click again to flip. */
+  const sortBy = (k: string) => { const n = new URLSearchParams(sp); if (sort === k) { if (rev) n.delete('rev'); else n.set('rev', '1'); } else { if (k === 'date-desc') n.delete('sort'); else n.set('sort', k); n.delete('rev'); } setSp(n, { replace: true }); };
+  const arrow = (k: string, up: boolean) => (sort === k ? ((up !== rev) ? ' ↑' : ' ↓') : '');
 
   // Producers credited on each release (exec producers + track producers)
   const producersByRelease = useMemo(() => {
@@ -71,8 +76,12 @@ export default function Library() {
       title: (a, b) => a.title.localeCompare(b.title),
       artist: (a, b) => (a.artist_credit ?? '').localeCompare(b.artist_credit ?? '') || (a.date ?? '').localeCompare(b.date ?? ''),
       added: (a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''),
+      type: (a, b) => a.type.localeCompare(b.type) || (b.date ?? `${b.year ?? 0}`).localeCompare(a.date ?? `${a.year ?? 0}`),
     };
-    return out.sort(cmp[sort] ?? cmp['date-desc']);
+    out.sort(cmp[sort] ?? cmp['date-desc']);
+    if (!rev) return out;
+    const has = (r: typeof out[0]) => (sort === 'rating' ? rv(r.id) > 0 : sort.startsWith('date') ? !!(r.date || r.year) : true);
+    return [...out.filter(has).reverse(), ...out.filter((r) => !has(r))];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.releases, ix, sp, producersByRelease]);
 
@@ -110,9 +119,8 @@ export default function Library() {
             <strong className="num">{rows.length.toLocaleString()}</strong><span className="muted">release{rows.length === 1 ? '' : 's'}</span>
             <div className="seg" role="group" aria-label="Release date">{[['', 'Released'], ['upcoming', 'Upcoming'], ['all', 'All']].map(([v, t]) => <button key={t} className={get('when') === v ? 'on' : ''} onClick={() => set('when', v || null)}>{t}</button>)}</div>
             <span className="spacer" />
-            <select className="select" value={sort} onChange={(e) => set('sort', e.target.value)} aria-label="Sort">
-              <option value="date-desc">Newest first</option><option value="date-asc">Oldest first</option><option value="rating">Highest rated</option>
-              <option value="artist">Artist A–Z</option><option value="title">Title A–Z</option><option value="added">Recently added</option></select>
+            <SortSelect value={sort} onChange={(v) => { const n = new URLSearchParams(sp); if (v === 'date-desc') n.delete('sort'); else n.set('sort', v); n.delete('rev'); setSp(n, { replace: true }); }} rev={rev} onRev={(r) => set('rev', r ? '1' : null)}
+              options={[['date-desc', 'Release date'], ['rating', 'Your rating'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z'], ['added', 'Recently added']]} />
             <div className="seg" role="group" aria-label="View">
               <button className={view === 'grid' ? 'on' : ''} onClick={() => set('view', null)}>Covers</button>
               <button className={view === 'table' ? 'on' : ''} onClick={() => set('view', 'table')}>Table</button></div>
@@ -121,7 +129,7 @@ export default function Library() {
             <div className="grid">{rows.slice(0, shown).map((r) => <ReleaseTile key={r.id} r={r} />)}</div>
           ) : (
             <div className="table-wrap"><table className="table">
-              <thead><tr><th className="thumb" /><th onClick={() => set('sort', 'title')}>Title</th><th onClick={() => set('sort', 'artist')}>Artist</th><th>Type</th><th onClick={() => set('sort', sort === 'date-desc' ? 'date-asc' : null)}>Date</th><th onClick={() => set('sort', 'rating')}>Rating</th></tr></thead>
+              <thead><tr><th className="thumb" /><th style={{ cursor: 'pointer' }} onClick={() => sortBy('title')}>Title{arrow('title', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('artist')}>Artist{arrow('artist', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('type')}>Type{arrow('type', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('date-desc')}>Date{arrow('date-desc', false)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('rating')}>Rating{arrow('rating', false)}</th></tr></thead>
               <tbody>{rows.slice(0, shown).map((r) => (
                 <tr key={r.id}><td><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></td>
                   <td><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link></td>

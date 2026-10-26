@@ -89,6 +89,10 @@ interface Store {
   setTrackCredits(trackId: string, role: 'producer' | 'featured', names: string[], opts?: { prune?: boolean }): Promise<string[]>;
   /** Delete these artists if nothing (credits, ratings, notes, lists, labels) refers to them any more. */
   pruneArtists(ids: string[], removedCredits?: Set<string>): Promise<number>;
+  /** Move everything credited to `from` onto `into`; `from`'s name becomes one of `into`'s other names. */
+  mergeArtists(from: Artist, into: Artist): Promise<void>;
+  /** Replace a stuck-together artist ("A & B") with the separate artists on every credit. */
+  splitArtist(combo: Artist, parts: Artist[]): Promise<void>;
   /** Turn "(feat. …)" in song titles into featured credits for artists already in the library. Returns credits added. */
   linkFeatures(tracks: Track[], onlyArtistId?: string, extra?: Artist): Promise<number>;
   /** Search every song title for this artist's name (and aliases) and credit their features. */
@@ -349,6 +353,37 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return { added: fresh.length, kept: keep.length, source: res.source, producers };
   }, [mergeLocal, upsert, ensureArtist, creditArtist, linkFeatures]);
 
+  const mergeArtists = useCallback(async (from: Artist, into: Artist) => {
+    const d = dataRef.current; const i0 = ixRef.current;
+    const have = new Set((i0.creditsByArtist.get(into.id) ?? []).map((c) => `${c.role}|${c.release_id ?? ''}|${c.track_id ?? ''}`));
+    const mine = i0.creditsByArtist.get(from.id) ?? [];
+    const dup = mine.filter((c) => have.has(`${c.role}|${c.release_id ?? ''}|${c.track_id ?? ''}`));
+    await upsert('credits', mine.filter((c) => !dup.includes(c)).map((c) => ({ ...c, artist_id: into.id })));
+    if (dup.length) await remove('credits', dup.map((c) => c.id));
+    await upsert('artists', [{ ...into, aliases: [...new Set([...into.aliases, from.name, ...from.aliases])].filter((n) => norm(n) !== norm(into.name)), is_producer: into.is_producer || from.is_producer, links: { ...from.links, ...into.links }, image_url: into.image_url ?? from.image_url, bio: into.bio ?? from.bio, ext: { ...from.ext, ...into.ext }, updated_at: now() }]);
+    const ann = i0.ann.get(annId('artist', from.id));
+    if (ann && !i0.ann.get(annId('artist', into.id))) await upsert('annotations', [{ ...ann, id: annId('artist', into.id), entity_id: into.id }]);
+    await upsert('list_items', d.list_items.filter((x) => x.entity_type === 'artist' && x.entity_id === from.id).map((x) => ({ ...x, entity_id: into.id })));
+    await upsert('concerts', d.concerts.filter((c) => c.artist_id === from.id).map((c) => ({ ...c, artist_id: into.id })));
+    await upsert('artist_labels', d.artist_labels.filter((x) => x.artist_id === from.id).map((x) => ({ ...x, artist_id: into.id }))).catch(() => undefined);
+    if (ann) await remove('annotations', [ann.id]);
+    await remove('artists', [from.id]);
+  }, [upsert, remove]);
+
+  const splitArtist = useCallback(async (combo: Artist, parts: Artist[]) => {
+    const i0 = ixRef.current;
+    const rows: Credit[] = [];
+    for (const c of i0.creditsByArtist.get(combo.id) ?? []) {
+      const target = c.release_id ? i0.creditsByRelease.get(c.release_id) : i0.creditsByTrack.get(c.track_id ?? '');
+      parts.forEach((p, n) => {
+        if (target?.some((x) => x.artist_id === p.id && x.role === c.role) || rows.some((x) => x.artist_id === p.id && x.role === c.role && x.release_id === c.release_id && x.track_id === c.track_id)) return;
+        rows.push({ id: uid(), artist_id: p.id, release_id: c.release_id ?? null, track_id: c.track_id ?? null, role: c.role, position: c.position + n });
+      });
+    }
+    await upsert('credits', rows);
+    await deleteArtist(combo.id);
+  }, [upsert, deleteArtist]);
+
   const pruneArtists = useCallback(async (ids: string[], removedCredits: Set<string> = new Set()) => {
     await new Promise((r) => setTimeout(r, 50)); // let the latest saves reach the in-memory data
     const d = dataRef.current; let n = 0;
@@ -399,7 +434,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return add.length;
   }, [upsert, say]);
 
-  const value: Store = { data, ix, loading, error, toast, toastAction, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList, replaceTracklist, refreshLabels, setTrackCredits, pruneArtists, linkFeatures, findFeaturesFor };
+  const value: Store = { data, ix, loading, error, toast, toastAction, say, upsert, remove, replaceAll, annotation, annotate, ensureArtist, creditArtist, addToList, deleteRelease, deleteArtist, ensureLabel, setReleaseLabels, setArtistLabels, deleteLabel, loadReleaseTracks, loadTracks, saveTracksQuiet, searchTracks, createList, addTracksToList, replaceTracklist, refreshLabels, setTrackCredits, pruneArtists, mergeArtists, splitArtist, linkFeatures, findFeaturesFor };
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

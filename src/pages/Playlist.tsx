@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { SortSelect, usePref } from '../components/controls';
+import { SortSelect, usePref, flip } from '../components/controls';
 import { CoverGrid, CoverPicker, FolderSelect, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useRemoveFromList, useSaveOrder } from '../components/ListBits';
 import { Cover, fmtMs, QuickRate } from '../components/ui';
 import { adapter } from '../lib/db';
@@ -29,6 +29,7 @@ export default function PlaylistView({ list: l }: { list: List }) {
   const removeItems = useRemoveFromList();
   useEffect(() => { void st.loadTracks(items.map((i) => i.entity_id!).filter(Boolean)); }, [items.length]); // eslint-disable-line react-hooks/exhaustive-deps
   const [sort, setSort] = useState('order');
+  const [rev, setRev] = useState(false);
   const [view, setView] = usePref(`list.view.${l.id}`, 'songs');
   const [picking, setPicking] = useState(false);
   const [q, setQ] = useState('');
@@ -49,12 +50,12 @@ export default function PlaylistView({ list: l }: { list: List }) {
     rating: (a, b) => (ix.ann.get(`track:${b.t?.id}`)?.rating ?? 0) - (ix.ann.get(`track:${a.t?.id}`)?.rating ?? 0),
     newest: (a, b) => (b.r?.date ?? `${b.r?.year ?? ''}`).localeCompare(a.r?.date ?? `${a.r?.year ?? ''}`),
   };
-  const shown = sort === 'order' ? rows : [...rows].sort(cmp[sort]);
+  const shown = flip(sort === 'order' ? rows : [...rows].sort(cmp[sort]), rev, (x) => (sort === 'rating' ? !!ix.ann.get(`track:${x.t?.id}`)?.rating : true));
   const ids = shown.map((x) => x.t?.id).filter(Boolean) as string[];
   const total = rows.reduce((s, x) => s + (x.t?.duration_ms ?? 0), 0);
   const playing = ps.ids.length ? ps.ids[ps.index] : null;
 
-  const canDrag = sort === 'order';
+  const canDrag = sort === 'order' && !rev;
 
   function exportCsv() {
     const head = ['#', 'Title', 'Artist', 'Album', 'Year', 'Length', 'Apple Music', 'Deezer'];
@@ -79,7 +80,7 @@ export default function PlaylistView({ list: l }: { list: List }) {
         <button className="btn" disabled={!ids.length} onClick={() => player.shuffle(ids, l.name)}>Shuffle</button>
         <div className="seg" role="group" aria-label="View"><button className={view !== 'albums' ? 'on' : ''} onClick={() => setView('songs')}>Songs</button><button className={view === 'albums' ? 'on' : ''} onClick={() => setView('albums')}>Albums</button></div>
         <FolderSelect list={l} />
-        <SortSelect value={sort} onChange={setSort} options={[['order', l.custom_order ? 'Your order' : 'Your order (newest first)'], ['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['length', 'Length'], ['rating', 'Your rating'], ['newest', 'Newest release']]} />
+        <SortSelect value={sort} onChange={(v) => { setSort(v); setRev(false); }} rev={rev} onRev={setRev} options={[['order', l.custom_order ? 'Your order' : 'Your order (newest first)'], ['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['length', 'Length'], ['rating', 'Your rating'], ['newest', 'Newest release']]} />
         {!canDrag && rows.length > 1 && <span className="small muted">Switch to “Your order” to drag songs around</span>}
         <span className="spacer" />
         <button className="btn" disabled={!rows.length} onClick={exportCsv} title="Spreadsheet with Apple Music links">Export CSV</button>

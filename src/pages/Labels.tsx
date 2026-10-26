@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { MultiSelect, RatingSelect, ratingMatches, SortSelect, usePref } from '../components/controls';
+import { MultiSelect, RatingSelect, ratingMatches, SortSelect, usePref, flip } from '../components/controls';
 import { AddToList, AnnotationPanel, Cover, fmtDate, LinkBar, LinksEditor, Modal, QuickRate, ReleaseTile } from '../components/ui';
 import { linkQueue } from '../lib/queue';
 import { norm, useStore, type Index } from '../lib/store';
@@ -23,8 +23,12 @@ export function Labels() {
   const { data, ix, upsert, say } = useStore();
   const nav = useNavigate();
   const [sp, setSp] = useSearchParams();
-  const q = sp.get('q') ?? ''; const sort = sp.get('sort') ?? 'recent'; const rating = sp.get('rating') ?? '';
+  const q = sp.get('q') ?? ''; const sort = sp.get('sort') ?? 'recent'; const rating = sp.get('rating') ?? ''; const rev = sp.get('rev') === '1';
   const set = (k: string, v: string | null) => { const n = new URLSearchParams(sp); if (v) n.set(k, v); else n.delete(k); setSp(n, { replace: true }); };
+  const sortTo = (k: string) => { const n = new URLSearchParams(sp); if (k === 'recent') n.delete('sort'); else n.set('sort', k); n.delete('rev'); setSp(n, { replace: true }); };
+  const sortBy = (k: string) => (sort === k ? set('rev', rev ? null : '1') : sortTo(k));
+  const arrow = (k: string, up: boolean) => (sort === k ? ((up !== rev) ? ' ↑' : ' ↓') : '');
+  const [view, setView] = usePref('labels.view', 'grid');
   const [showCounts, setShowCounts] = usePref('labels.showCounts', false);
   const [name, setName] = useState('');
 
@@ -37,6 +41,7 @@ export function Labels() {
         return sort === 'az' ? az : sort === 'za' ? -az : sort === 'rating' ? y.mine - x.mine || az : sort === 'count' ? y.n - x.n || az : y.last.localeCompare(x.last) || az;
       });
   }, [data.labels, ix, q, sort, rating]);
+  const shownRows = flip(rows, rev, (r) => (sort === 'rating' ? r.mine > 0 : sort === 'count' ? r.n > 0 : sort === 'recent' ? !!r.last : true));
 
   const todo = data.releases.filter((r) => !r.ext.labels_at && !ix.releaseLabelsByRelease.get(r.id)?.length && (r.ext.deezer_id || r.ext.mbid || r.ext.apple_id)).map((r) => r.id);
   return (
@@ -47,16 +52,28 @@ export function Labels() {
       </div>
       <div className="row" style={{ marginBottom: 20 }}>
         <input className="input" style={{ width: 240 }} placeholder="Filter labels" value={q} onChange={(e) => set('q', e.target.value)} />
-        <SortSelect value={sort} onChange={(v) => set('sort', v === 'recent' ? null : v)} options={[['recent', 'Most recent release'], ['az', 'A–Z'], ['za', 'Z–A'], ['rating', 'Your rating'], ['count', 'Most releases']]} />
+        <SortSelect value={sort} onChange={sortTo} rev={rev} onRev={(r) => set('rev', r ? '1' : null)} options={[['recent', 'Most recent release'], ['az', 'A–Z'], ['rating', 'Your rating'], ['count', 'Most releases']]} />
         <RatingSelect value={rating} onChange={(v) => set('rating', v)} label="Your rating of the label" />
-        <label className="row"><input type="checkbox" checked={showCounts} onChange={(e) => setShowCounts(e.target.checked)} /> Show counts</label>
+        {view !== 'table' && <label className="row"><input type="checkbox" checked={showCounts} onChange={(e) => setShowCounts(e.target.checked)} /> Show counts</label>}
+        <span className="muted num">{rows.length.toLocaleString()}</span>
+        <div className="seg" role="group" aria-label="View"><button className={view !== 'table' ? 'on' : ''} onClick={() => setView('grid')}>Grid</button><button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>Table</button></div>
         <span className="spacer" />
         <form className="row" onSubmit={async (e) => { e.preventDefault(); if (!name.trim()) return; const l: Label = { id: uid(), name: name.trim(), aliases: [], links: {}, ext: {}, created_at: now(), updated_at: now() }; await upsert('labels', [l]); nav(`/label/${l.id}`); }}>
           <input className="input" placeholder="New label" value={name} onChange={(e) => setName(e.target.value)} style={{ width: 160 }} /><button className="btn" disabled={!name.trim()}>Add</button>
         </form>
       </div>
       {!rows.length ? <div className="empty">{data.labels.length ? 'No labels match.' : 'No labels yet. “Find labels” pulls them from Deezer, MusicBrainz and Apple Music for releases that are already linked — or add them by hand on any release.'}</div> : (
-        <div className="grid tight">{rows.map(({ l, n, last }) => (
+        view === 'table' ? (
+          <div className="table-wrap"><table className="table">
+            <thead><tr><th className="thumb" /><th style={{ cursor: 'pointer' }} onClick={() => sortBy('az')}>Label{arrow('az', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('recent')}>Latest release{arrow('recent', false)}</th>
+              <th style={{ cursor: 'pointer', textAlign: 'right' }} onClick={() => sortBy('count')}>Releases{arrow('count', false)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('rating')}>Rating{arrow('rating', false)}</th></tr></thead>
+            <tbody>{shownRows.map(({ l, n, last }) => (
+              <tr key={l.id}><td><Link to={`/label/${l.id}`}><Cover src={l.image_url} title={l.name} size={36} /></Link></td>
+                <td><Link to={`/label/${l.id}`} style={{ fontWeight: 600 }}>{l.name}</Link></td>
+                <td className="num muted small">{last ? fmtDate(last) : '—'}</td><td className="num" style={{ textAlign: 'right' }}>{n || ''}</td>
+                <td><QuickRate type="label" id={l.id} /></td></tr>))}</tbody>
+          </table></div>
+        ) : <div className="grid tight">{shownRows.map(({ l, n, last }) => (
           <div key={l.id} className="tile">
             <Link to={`/label/${l.id}`}><Cover src={l.image_url} title={l.name} /></Link>
             <div className="t"><Link to={`/label/${l.id}`}>{l.name}</Link></div>
@@ -77,6 +94,7 @@ export default function LabelPage() {
   const [editing, setEditing] = useState(false);
   const [merging, setMerging] = useState(false);
   const [sort, setSort] = usePref('label.sort', 'newest');
+  const [rev, setRev] = usePref('label.rev', false);
   const [types, setTypes] = useState<string[]>([]);
   const { releases, roster } = useMemo(() => labelContents(ix, id!), [ix, id]);
   if (!l) return <div className="empty">Label not found. <Link to="/labels">All labels</Link></div>;
@@ -85,6 +103,7 @@ export default function LabelPage() {
   const shown = releases.filter((r) => !types.length || types.includes(r.type)).sort(
     sort === 'oldest' ? (x, y) => day(x).localeCompare(day(y)) : sort === 'rating' ? (x, y) => rt(y) - rt(x) || day(y).localeCompare(day(x))
       : sort === 'title' ? (x, y) => x.title.localeCompare(y.title) : sort === 'artist' ? (x, y) => (x.artist_credit ?? '').localeCompare(y.artist_credit ?? '') : (x, y) => day(y).localeCompare(day(x)));
+  const shownSorted = flip(shown, rev, (r) => (sort === 'rating' ? rt(r) > 0 : true));
   const years = releases.map((r) => r.year).filter(Boolean) as number[];
   const save = (p: Partial<Label>) => upsert('labels', [{ ...l, ...p, updated_at: now() }]);
 
@@ -114,10 +133,10 @@ export default function LabelPage() {
           </>}
           <h2 className="h-sec">Releases</h2>
           {releases.length > 0 && <div className="row" style={{ marginBottom: 14 }}>
-            <SortSelect value={sort} onChange={setSort} options={[['newest', 'Newest first'], ['oldest', 'Oldest first'], ['rating', 'Your rating'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z']]} />
+            <SortSelect value={sort} onChange={(v) => { setSort(v); setRev(false); }} rev={rev} onRev={setRev} options={[['newest', 'Release date'], ['rating', 'Your rating'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z']]} />
             <div style={{ minWidth: 180 }}><MultiSelect label="Types" options={[...new Set(releases.map((r) => r.type))].sort()} value={types} onChange={setTypes} /></div>
           </div>}
-          {shown.length ? <div className="grid tight">{shown.map((r) => <ReleaseTile key={r.id} r={r} />)}</div> : <div className="empty">No releases on this label yet. Add it on a release with Edit.</div>}
+          {shownSorted.length ? <div className="grid tight">{shownSorted.map((r) => <ReleaseTile key={r.id} r={r} />)}</div> : <div className="empty">No releases on this label yet. Add it on a release with Edit.</div>}
         </div>
         <div className="stack">
           <AnnotationPanel type="label" id={l.id} />

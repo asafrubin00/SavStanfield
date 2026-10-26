@@ -262,3 +262,7 @@ details summary { cursor: pointer; }
 .tile:hover .tile-remove, .tile-remove:focus-visible { opacity: 1; }
 @media (hover: none) { .tile-remove { opacity: .9; } }
 .tile-cover:has(.tile-remove) .tile-rank { left: 40px; }
+.sort-dir { padding: 5px 10px; font-size: 15px; line-height: 1; }
+.nav-btns { display: inline-flex; gap: 2px; margin-right: 6px; }
+.nav-btns .btn { font-size: 22px; line-height: 1; padding: 2px 10px 5px; }
+.nav-btns .btn:disabled { opacity: .3; }

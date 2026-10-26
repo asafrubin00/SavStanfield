@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { SortSelect, usePref } from '../components/controls';
+import { SortSelect, usePref, flip } from '../components/controls';
 import { Cover, Credits, QuickRate, ReleaseTile } from '../components/ui';
 import { norm, useStore } from '../lib/store';
 import { now, uid } from '../lib/util';
@@ -97,6 +97,7 @@ export default function Charts() {
   const rated = useMemo(() => inScope.map((r) => ({ r, a: ix.ann.get(`release:${r.id}`) })).filter((x) => x.a?.rating), [inScope, ix]);
   const [exact, setExact] = useState(false);
   const [topSort, setTopSort] = useState('rating');
+  const [topRev, setTopRev] = useState(false);
   const top = useMemo(() => {
     const day = (r: typeof rated[0]['r']) => r.date ?? `${r.year ?? 0}`;
     const pool = min === 0 ? inScope.map((r) => ({ r, a: ix.ann.get(`release:${r.id}`) })) : rated.filter((x) => exact ? x.a!.rating === min : x.a!.rating! >= min);
@@ -105,8 +106,8 @@ export default function Charts() {
       newest: (x, y) => day(y.r).localeCompare(day(x.r)), oldest: (x, y) => day(x.r).localeCompare(day(y.r)),
       artist: (x, y) => (x.r.artist_credit ?? '').localeCompare(y.r.artist_credit ?? '') || day(x.r).localeCompare(day(y.r)), title: (x, y) => x.r.title.localeCompare(y.r.title),
     };
-    return pool.sort(cmp[topSort] ?? cmp.rating).map((x) => x.r);
-  }, [rated, inScope, ix, min, exact, topSort]);
+    return flip(pool.sort(cmp[topSort] ?? cmp.rating), topRev, (x) => (topSort === 'rating' ? !!x.a?.rating : true)).map((x) => x.r);
+  }, [rated, inScope, ix, min, exact, topSort, topRev]);
 
   const perYear = useMemo(() => {
     const m = new Map<number, number>(); for (const r of inScope) if (r.year && r.year <= new Date().getFullYear() + 1) m.set(r.year, (m.get(r.year) ?? 0) + 1);
@@ -163,7 +164,7 @@ export default function Charts() {
       <div className="row" style={{ marginBottom: 14 }}>
         <div className="seg"><button className={min === 0 ? 'on' : ''} onClick={() => { setMin(0); setShown(SHOW); }}>All</button>{[5, 4, 3, 2, 1].map((n) => <button key={n} className={min === n ? 'on' : ''} onClick={() => { setMin(n); setShown(SHOW); }}>{'★'.repeat(n)}</button>)}</div>
         {min > 0 && <div className="seg"><button className={!exact ? 'on' : ''} onClick={() => setExact(false)}>and up</button><button className={exact ? 'on' : ''} onClick={() => setExact(true)}>exactly</button></div>}
-        <SortSelect value={topSort} onChange={setTopSort} options={[['rating', 'Highest rated'], ['newest', 'Newest first'], ['oldest', 'Oldest first'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z']]} />
+        <SortSelect value={topSort} onChange={(v) => { setTopSort(v); setTopRev(false); }} rev={topRev} onRev={setTopRev} options={[['rating', 'Your rating'], ['newest', 'Release date'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z']]} />
         <div className="seg" role="group" aria-label="View"><button className={view !== 'list' ? 'on' : ''} onClick={() => setView('covers')}>Album view</button><button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')}>List view</button></div>
         <span className="muted">{top.length.toLocaleString()}</span><span className="spacer" />
         <button className="btn" disabled={!top.length} onClick={saveAsList}>Save as a list</button>
