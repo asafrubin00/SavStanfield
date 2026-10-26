@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Cover } from '../components/ui';
 import { parseArtistCredit } from '../lib/importSheet';
 import { linkQueue } from '../lib/queue';
+import { adapter } from '../lib/db';
 import { norm, releaseArtists, useStore, type Index } from '../lib/store';
 import { cleanTitle } from '../lib/sources';
 import type { Annotation, Release } from '../lib/types';
@@ -73,6 +74,9 @@ export default function ReviewImport() {
   const [picked, setPicked] = useState<Record<number, string>>({}); // review index → release id ('' = none)
   const [choice, setChoice] = useState<Record<number, Choice>>({});
   const [busy, setBusy] = useState('');
+  const [verify, setVerify] = useState('');
+  const [dbCount, setDbCount] = useState<number | null>(null);
+  useEffect(() => { adapter.reviewCheck().then((c) => setDbCount(c.total)).catch(() => setDbCount(null)); }, []);
   const reviews = useMemo(() => parseNoteReviews(text), [text]);
   // Only redo the matching when releases or credits change — not when a review or rating is saved
   const prepped = useMemo(() => prep(ix, data.releases), [data.releases, data.credits]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -121,6 +125,10 @@ export default function ReviewImport() {
       }
       const out = [...byRelease.values()];
       await st.upsert('annotations', out);
+      // Read straight back from the database to be sure they were kept
+      const chk = await adapter.reviewCheck(out.map((a) => a.id));
+      setDbCount(chk.total);
+      setVerify(`${chk.found} of ${out.length} confirmed saved in your database (it now holds ${chk.total} reviews in total).`);
       st.say(`Imported ${toSave.length} review${toSave.length === 1 ? '' : 's'}${out.length < toSave.length ? ` onto ${out.length} albums` : ''}`);
       setText(''); setPicked({}); setChoice({});
     } catch (e) { st.say((e as Error).message); } finally { setBusy(''); }
@@ -130,6 +138,7 @@ export default function ReviewImport() {
     <div>
       <div className="row" style={{ marginBottom: 6 }}><h1 className="h-page">Import reviews</h1></div>
       <p className="muted" style={{ marginTop: 0, maxWidth: '72ch' }}>In Apple Notes, open a note, press ⌘A then ⌘C, and paste it below. Each review should start with a line like <code>[2026] Gucci Mane - Against All Odds</code>; everything up to the next one is the review. Your star ratings aren't touched — the “3/5” stays in the text. Nothing is saved until you click Import.</p>
+      <div className="small muted" style={{ marginBottom: 8 }}>Reviews in your database right now: <strong>{dbCount ?? '…'}</strong>{verify && <> · <span style={{ color: 'var(--ink)' }}>{verify}</span></>}</div>
       <textarea className="textarea" style={{ minHeight: 160 }} placeholder={'ALBUMS I listened to in 2026\n\n[2026] Gucci Mane - Against All Odds\n\nOn the 21st October since Wop took his first steps… 3/5'} value={text} onChange={(e) => { setText(e.target.value); setPicked({}); setChoice({}); }} />
       {text.trim() && !rows.length && <div className="empty" style={{ marginTop: 12 }}>No reviews found — each needs a heading line like <code>[2026] Artist - Title</code>.</div>}
       {rows.length > 0 && <>

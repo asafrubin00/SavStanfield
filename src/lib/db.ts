@@ -25,6 +25,8 @@ export interface Adapter {
   allTracks(): Promise<Track[]>;
   /** Songs whose title has "feat./ft./with …name…", or whose own artist credit names them. */
   tracksFeaturing(name: string): Promise<Track[]>;
+  /** Ask the database directly: how many reviews it holds, and which of these annotation ids have a review. */
+  reviewCheck(ids?: string[]): Promise<{ total: number; found: number }>;
 }
 
 const CHUNK = 500;
@@ -112,6 +114,17 @@ const cloudAdapter: Adapter = {
     const or = [`title.ilike."*feat*${n}*"`, `title.ilike."*ft*${n}*"`, `title.ilike."*with*${n}*"`, `artist_credit.ilike."*${n}*"`].join(',');
     return pageAll<Track>((f, t) => cloudTracks((b) => b.select('*')).or(or).order('id').range(f, t));
   },
+  async reviewCheck(ids = []) {
+    const { count, error } = await supabase!.from('annotations').select('id', { count: 'exact', head: true }).not('review', 'is', null).neq('review', '');
+    if (error) throw new Error(error.message);
+    let found = 0;
+    for (let i = 0; i < ids.length; i += 150) {
+      const { data, error: e2 } = await supabase!.from('annotations').select('id, review').in('id', ids.slice(i, i + 150));
+      if (e2) throw new Error(e2.message);
+      found += (data ?? []).filter((r) => (r as { review?: string }).review).length;
+    }
+    return { total: count ?? 0, found };
+  },
   async clear(table) {
     const { error } = await supabase!.from(table).delete().neq('id', '');
     if (error) throw new Error(`Clearing ${table}: ${error.message}`);
@@ -166,6 +179,7 @@ const localAdapter: Adapter = {
   async tracksByIds(ids) { const s = new Set(ids); return localCache!.tracks.filter((t) => s.has(t.id)); },
   async searchTracks(q, limit = 12) { const n = q.toLowerCase(); return localCache!.tracks.filter((t) => t.title.toLowerCase().includes(n)).slice(0, limit); },
   async allTracks() { return [...localCache!.tracks]; },
+  async reviewCheck(ids = []) { const has = new Set(localCache!.annotations.filter((a) => a.review).map((a) => a.id)); return { total: has.size, found: ids.filter((i) => has.has(i)).length }; },
   async tracksFeaturing(name) {
     const n = name.toLowerCase();
     return localCache!.tracks.filter((t) => { const s = t.title.toLowerCase(); const i = s.search(/\b(feat|ft|with)\b/); return (i >= 0 && s.indexOf(n, i) > i) || (t.artist_credit ?? '').toLowerCase().includes(n); });
