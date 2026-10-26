@@ -109,15 +109,19 @@ export default function ReviewImport() {
   async function save() {
     setBusy('Saving reviews');
     try {
-      const out: Annotation[] = [];
+      // Several reviews of the same album (e.g. a first listen and a revisit) become one review, oldest first
+      const byRelease = new Map<string, Annotation>();
       for (const i of toSave) {
         const rid = target(i); const key = `release:${rid}`; const d = decision(i); const nr = rows[i].nr;
-        const cur = ix.ann.get(key) ?? { id: key, entity_type: 'release' as const, entity_id: rid, favorite: false };
-        const review = d === 'append' ? `${existing(rid)}\n\n— ${nr.year ?? ''}\n${nr.text}`.trim() : nr.text;
-        out.push({ ...cur, review, updated_at: now() } as Annotation);
+        const prev = byRelease.get(key);
+        const cur = prev ?? ix.ann.get(key) ?? { id: key, entity_type: 'release' as const, entity_id: rid, favorite: false };
+        const base = prev ? prev.review ?? '' : d === 'append' ? existing(rid) : '';
+        const review = base ? `${base}\n\n— ${nr.year ?? ''}\n${nr.text}`.trim() : nr.text;
+        byRelease.set(key, { ...cur, review, updated_at: now() } as Annotation);
       }
+      const out = [...byRelease.values()];
       await st.upsert('annotations', out);
-      st.say(`Imported ${out.length} review${out.length === 1 ? '' : 's'}`);
+      st.say(`Imported ${toSave.length} review${toSave.length === 1 ? '' : 's'}${out.length < toSave.length ? ` onto ${out.length} albums` : ''}`);
       setText(''); setPicked({}); setChoice({});
     } catch (e) { st.say((e as Error).message); } finally { setBusy(''); }
   }

@@ -171,7 +171,7 @@ function Shell() {
         </main>
       </div>
       <Player />
-      {toast && <div className="toast" role="status" style={playerOpen ? { bottom: 250 } : undefined}>{toast}{toastAction && <button type="button" className="btn sm" style={{ marginLeft: 12 }} onClick={() => { toastAction.run(); say('Undone'); }}>{toastAction.label}</button>}</div>}
+      {toast && <div className="toast" role="status" style={playerOpen ? { bottom: 250 } : undefined}>{toast}{toastAction && <button type="button" className="btn sm" style={{ marginLeft: 12 }} onClick={() => { toastAction.run(); if (toastAction.label === 'Undo') say('Undone'); else say(''); }}>{toastAction.label}</button>}</div>}
     </div>
   );
 }

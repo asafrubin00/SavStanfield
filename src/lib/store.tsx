@@ -128,6 +128,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
 
   const upsert = useCallback(async <T extends TableName>(table: T, rows: Tables[T][]) => {
     if (!rows.length) return;
+    const before = dataRef.current[table];
     setData((d) => {
       const list = [...(d[table] as { id: string }[])];
       const pos = new Map(list.map((r, i) => [r.id, i]));
@@ -137,7 +138,12 @@ export function StoreProvider({ children }: { children: ReactNode }) {
       }
       return { ...d, [table]: list };
     });
-    try { await adapter.upsert(table, rows); } catch (e) { say(`Not saved: ${(e as Error).message}`); throw e; }
+    try { await adapter.upsert(table, rows); }
+    catch (e) {
+      // Don't show changes the database didn't keep
+      setData((d) => ({ ...d, [table]: before }));
+      say(`Not saved: ${(e as Error).message}`, { label: 'OK', run: () => undefined }); throw e;
+    }
   }, [say]);
 
   const remove = useCallback(async (table: TableName, ids: string[]) => {

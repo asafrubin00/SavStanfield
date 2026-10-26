@@ -121,6 +121,8 @@ const cloudAdapter: Adapter = {
     if (table === 'lists' && missingColumns.has('lists.custom_order')) rows = rows.map((r) => { const { custom_order: _o, ...rest } = r as Tables['lists']; void _o; return rest; }) as typeof rows;
     if (table === 'lists' && missingColumns.has('lists.cover_url')) rows = rows.map((r) => { const { cover_url: _c, ...rest } = r as Tables['lists']; void _c; return rest; }) as typeof rows;
     if (missingTables.has(table)) throw new Error('Labels aren’t set up in Supabase yet — run supabase/002-labels.sql');
+    // The database rejects a whole batch if it touches the same row twice — keep only the last version of each
+    rows = [...new Map((rows as { id: string }[]).map((r) => [r.id, r])).values()] as typeof rows;
     for (let i = 0; i < rows.length; i += CHUNK) {
       const { error } = await supabase!.from(table).upsert(rows.slice(i, i + CHUNK) as never[], { onConflict: 'owner,id' });
       if (error) throw new Error(`Saving ${table}: ${error.message}`);
