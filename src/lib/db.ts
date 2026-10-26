@@ -70,7 +70,8 @@ const cloudAdapter: Adapter = {
     await Promise.all(TABLES.filter((t) => t !== 'tracks').map(async (t) => {
       const rows: unknown[] = [];
       for (let from = 0; ; from += 1000) {
-        const { data, error } = await supabase!.from(t).select('*').range(from, from + 999);
+        // A fixed order matters: without it, pages can overlap or skip rows once rows have changed
+        const { data, error } = await supabase!.from(t).select('*').order('id').range(from, from + 999);
         if (error) {
           // Tables added in later updates may not exist yet until their SQL is run
           if (OPTIONAL.includes(t) && /does not exist|schema cache|PGRST205|42P01/i.test(`${error.code} ${error.message}`)) { missingTables.add(t); break; }
@@ -90,10 +91,10 @@ const cloudAdapter: Adapter = {
     return out;
   },
   async tracksForReleases(releaseIds) {
-    return inChunks(releaseIds, 100, (c) => pageAll<Track>((f, t) => cloudTracks((b) => b.select('*')).in('release_id', c).range(f, t)));
+    return inChunks(releaseIds, 100, (c) => pageAll<Track>((f, t) => cloudTracks((b) => b.select('*')).in('release_id', c).order('id').range(f, t)));
   },
   async tracksByIds(ids) {
-    return inChunks(ids, 150, (c) => pageAll<Track>((f, t) => cloudTracks((b) => b.select('*')).in('id', c).range(f, t)));
+    return inChunks(ids, 150, (c) => pageAll<Track>((f, t) => cloudTracks((b) => b.select('*')).in('id', c).order('id').range(f, t)));
   },
   async searchTracks(q, limit = 12) {
     const term = q.replace(/[%_,()]/g, ' ').trim();
