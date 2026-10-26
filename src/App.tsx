@@ -123,7 +123,7 @@ function Shell() {
   return (
     <div className="shell">
       <aside className={`sidebar${menu ? ' open' : ''}`}>
-        <Link to="/" className="wordmark" style={{ textDecoration: 'none' }}>SavStanfield<span>music hub</span></Link>
+        <Link to="/" className="brand" aria-label="Sav Stanfield — home"><img src="/logo.jpg" alt="" /><span className="brand-name"><span>Sav</span><span>Stanfield</span></span></Link>
         <nav className="nav">
           {nav.map(([to, label, n]) => <NavLink key={to} to={to} end={to === '/'}>{label}{n !== null && <span className="count">{n.toLocaleString()}</span>}</NavLink>)}
           <div className="nav-sep" />
@@ -185,7 +185,7 @@ function SignIn() {
         const { error } = await supabase!.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
         if (error) setErr(error.message); else setSent(true);
       }}>
-        <div className="wordmark" style={{ margin: '0 0 18px' }}>SavStanfield<span>music hub</span></div>
+        <div className="brand" style={{ margin: '0 0 18px' }}><img src="/logo.jpg" alt="" /><span className="brand-name"><span>Sav</span><span>Stanfield</span></span></div>
         {sent ? <p>Check your email for a sign-in link.</p> : <>
           <label><span className="label">Email</span><input className="input" style={{ width: '100%' }} type="email" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
           <button className="btn primary" style={{ marginTop: 12 }}>Email me a sign-in link</button>
