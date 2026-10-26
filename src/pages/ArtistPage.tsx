@@ -4,7 +4,7 @@ import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, LinkBar, LinksEdit
 import { autoLinkArtist } from '../lib/enrich';
 import { parseArtistCredit } from '../lib/importSheet';
 import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists, type AppleAlbum, type MBGroup } from '../lib/sources';
-import { artistLabels, norm, trackArtists, useStore } from '../lib/store';
+import { artistLabels, norm, shownInArtists, trackArtists, useStore } from '../lib/store';
 import { SortSelect, usePref } from '../components/controls';
 import { type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
@@ -115,6 +115,8 @@ export default function ArtistPage() {
         <AddToList type="artist" id={a.id} />
         <button className="btn" onClick={() => setEditing(true)}>Edit</button>
         <button className="btn" onClick={() => setMerging(true)}>Merge…</button>
+        <select className="select" value={(a.ext.show_in_artists as string) ?? ''} onChange={(e) => void save({ ext: { ...a.ext, show_in_artists: e.target.value || undefined } })} aria-label="Show in Artists" title="Whether this person appears on the Artists page">
+          <option value="">Artists page: auto ({shownInArtists(ix, { ...a, ext: { ...a.ext, show_in_artists: undefined } }) ? 'shown' : 'hidden'})</option><option value="always">Artists page: always</option><option value="never">Artists page: never</option></select>
         <button className="btn" disabled={featBusy} title="Looks for “feat. / ft. / with …” this artist in every song title" onClick={async () => { setFeatBusy(true); try { const n = await st.findFeaturesFor(a); st.say(n ? `Found ${n} new feature${n > 1 ? 's' : ''}` : 'No new features found'); } catch (e) { st.say((e as Error).message); } finally { setFeatBusy(false); } }}>{featBusy ? 'Searching…' : 'Find features'}</button>
         {busy && <span className="small muted">{busy}</span>}
       </div>

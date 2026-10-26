@@ -437,3 +437,10 @@ export function trackArtists(ix: Index, trackId: string, role: Credit['role']): 
     .map((c) => ix.artists.get(c.artist_id)).filter(Boolean) as Artist[];
 }
 export type { Release, Track, CriticScore };
+
+/** Whether an artist appears on the Artists page: your setting if you've made one, otherwise only if they have a release of their own. */
+export function shownInArtists(ix: Index, a: Artist): boolean {
+  const pick = a.ext.show_in_artists as 'always' | 'never' | undefined;
+  if (pick) return pick === 'always';
+  return (ix.creditsByArtist.get(a.id) ?? []).some((c) => c.role === 'primary' && !!c.release_id);
+}

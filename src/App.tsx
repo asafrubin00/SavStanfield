@@ -6,7 +6,7 @@ import Player from './components/Player';
 import { usePlayer } from './lib/player';
 import { adapter, missingColumns, missingTables, mode, supabase } from './lib/db';
 import { linkQueue, useLinkQueue } from './lib/queue';
-import { norm, releaseArtists, StoreProvider, useStore } from './lib/store';
+import { norm, releaseArtists, StoreProvider, useStore, shownInArtists } from './lib/store';
 import ArtistPage from './pages/ArtistPage';
 import Artists from './pages/Artists';
 import Charts from './pages/Charts';
@@ -110,9 +110,10 @@ function Shell() {
   }, [ix, upsert, setReleaseLabels, saveTracksQuiet, replaceTracklist, refreshLabels]);
   const playerOpen = usePlayer().ids.length > 0;
   const producers = useMemo(() => data.artists.filter((a) => a.is_producer).length, [data.artists]);
+  const artistsShown = useMemo(() => data.artists.filter((a) => shownInArtists(ix, a)).length, [data.artists, ix]);
   const toReview = useMemo(() => { const t = new Date().toISOString().slice(0, 10); return data.releases.filter((r) => needsReview(r, t)).length; }, [data.releases]);
   const nav: [string, string, number | null][] = [
-    ['/', 'Home', null], ['/library', 'Library', data.releases.length], ['/artists', 'Artists', data.artists.length],
+    ['/', 'Home', null], ['/library', 'Library', data.releases.length], ['/artists', 'Artists', artistsShown],
     ['/producers', 'Producers', producers], ['/labels', 'Labels', data.labels.length], ['/lists', 'Lists', data.lists.filter((l) => l.kind !== 'folder').length], ['/charts', 'Charts', null],
     ['/concerts', 'Concerts', data.concerts.length],
   ];
