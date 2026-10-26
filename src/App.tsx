@@ -1,3 +1,4 @@
+import ReviewImport from './pages/ReviewImport';
 import TidyArtists from './pages/TidyArtists';
 import { NavButtons, useScrollMemory } from './lib/nav';
 import { seedAppleArtist } from './lib/sources';
@@ -150,6 +151,7 @@ function Shell() {
               <Route path="/library" element={<Library />} />
               <Route path="/artists" element={<Artists producers={false} />} />
               <Route path="/artists/tidy" element={<TidyArtists />} />
+              <Route path="/import-reviews" element={<ReviewImport />} />
               <Route path="/producers" element={<Artists producers />} />
               <Route path="/artist/:id" element={<ArtistPage />} />
               <Route path="/release/:id" element={<ReleasePage />} />
