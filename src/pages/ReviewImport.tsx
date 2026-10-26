@@ -33,9 +33,15 @@ const akey = (s: string) => norm(s.replace(/\$/g, 's')).replace(/^the /, '').rep
 const bigrams = (s: string) => { const b = new Set<string>(); for (let i = 0; i < s.length - 1; i++) b.add(s.slice(i, i + 2)); return b; };
 const dice = (a: string, b: string) => { if (a === b) return 1; const x = bigrams(a), y = bigrams(b); let n = 0; for (const g of x) if (y.has(g)) n++; return (2 * n) / (x.size + y.size || 1); };
 
-function artistScore(ix: Index, r: Release, artist: string) {
+const diceSets = (x: Set<string>, y: Set<string>) => { let n = 0; for (const g of x) if (y.has(g)) n++; return (2 * n) / (x.size + y.size || 1); };
+/** Everything about each release the matcher needs, worked out once rather than for every review. */
+type Prepped = { r: Release; t: string; tb: Set<string>; names: string[] };
+function prep(ix: Index, releases: Release[]): Prepped[] {
+  return releases.map((r) => { const t = tkey(r.title); return { r, t, tb: bigrams(t), names: [...new Set([r.artist_credit ?? '', ...releaseArtists(ix, r.id).map((a) => a.name)].map(akey).filter(Boolean))] }; });
+}
+
+function artistScore(names: string[], artist: string) {
   const want = akey(artist); const parts = artist.split(/\s*(?:&|,|\bx\b|\band\b)\s*/i).map(akey).filter(Boolean);
-  const names = [r.artist_credit ?? '', ...releaseArtists(ix, r.id).map((a) => a.name)].map(akey).filter(Boolean);
   let best = 0;
   for (const n of names) {
     best = Math.max(best, dice(n, want));
@@ -46,14 +52,17 @@ function artistScore(ix: Index, r: Release, artist: string) {
 }
 
 type Match = { r: Release; score: number };
-function candidates(ix: Index, releases: Release[], nr: NoteReview): Match[] {
-  const t = tkey(nr.title);
-  return releases.map((r) => {
-    const ts = dice(tkey(r.title), t); if (ts < 0.6) return null;
-    const as = artistScore(ix, r, nr.artist); if (as < 0.6) return null;
-    const yr = nr.year && r.year ? (Math.abs(r.year - nr.year) <= 1 ? 0.05 : -0.05) : 0;
-    return { r, score: ts * 0.65 + as * 0.35 + yr };
-  }).filter((m): m is Match => !!m).sort((a, b) => b.score - a.score).slice(0, 4);
+function candidates(all: Prepped[], nr: NoteReview): Match[] {
+  const t = tkey(nr.title); const tb = bigrams(t);
+  const out: Match[] = [];
+  for (const p of all) {
+    if (Math.abs(p.t.length - t.length) > Math.max(p.t.length, t.length) * 0.5) continue;
+    const ts = p.t === t ? 1 : diceSets(p.tb, tb); if (ts < 0.6) continue;
+    const as = artistScore(p.names, nr.artist); if (as < 0.6) continue;
+    const yr = nr.year && p.r.year ? (Math.abs(p.r.year - nr.year) <= 1 ? 0.05 : -0.05) : 0;
+    out.push({ r: p.r, score: ts * 0.65 + as * 0.35 + yr });
+  }
+  return out.sort((a, b) => b.score - a.score).slice(0, 4);
 }
 
 type Choice = 'replace' | 'append' | 'skip';
@@ -65,11 +74,15 @@ export default function ReviewImport() {
   const [choice, setChoice] = useState<Record<number, Choice>>({});
   const [busy, setBusy] = useState('');
   const reviews = useMemo(() => parseNoteReviews(text), [text]);
+  // Only redo the matching when releases or credits change — not when a review or rating is saved
+  const prepped = useMemo(() => prep(ix, data.releases), [data.releases, data.credits]); // eslint-disable-line react-hooks/exhaustive-deps
   const rows = useMemo(() => reviews.map((nr) => {
-    const c = candidates(ix, data.releases, nr);
-    const sure = c[0] && c[0].score >= 0.88 && (!c[1] || c[0].score - c[1].score > 0.06);
-    return { nr, c, auto: sure ? c[0].r.id : '' };
-  }), [reviews, ix, data.releases]);
+    const c = candidates(prepped, nr);
+    // A strong match is picked even when there are look-alikes (deluxe editions, duplicates) — those get flagged to check
+    const good = c[0] && c[0].score >= 0.88;
+    const close = good && !!c[1] && c[0].score - c[1].score <= 0.06;
+    return { nr, c, auto: good ? c[0].r.id : '', check: close };
+  }), [reviews, prepped]);
   const target = (i: number) => (i in picked ? picked[i] : rows[i].auto);
   const existing = (rid: string) => ix.ann.get(`release:${rid}`)?.review?.trim() ?? '';
   const same = (a: string, b: string) => norm(a) === norm(b);
@@ -129,6 +142,7 @@ export default function ReviewImport() {
               <td style={{ width: '28%' }}><strong>{nr.title}</strong><div className="small muted">{nr.artist}{nr.year ? ` · ${nr.year}` : ''}</div>
                 <div className="small muted" style={{ marginTop: 4, maxWidth: 360, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={nr.text}>{nr.text.slice(0, 160)}</div></td>
               <td style={{ width: '34%' }}>
+                {r && rows[i].check && !(i in picked) && <div className="small" style={{ color: 'var(--star)', marginBottom: 4 }}>Several similar — check it's the right one</div>}
                 {r ? <Link to={`/release/${r.id}`} className="row" style={{ gap: 8, flexWrap: 'nowrap' }}><Cover src={r.artwork_url} title={r.title} size={40} /><span><strong>{r.title}</strong><div className="small muted">{r.artist_credit} · {r.year}</div></span></Link>
                   : <span className="small" style={{ color: 'var(--danger)' }}>Not matched</span>}
                 {(c.length > 1 || !r) && <select className="select" style={{ marginTop: 6, maxWidth: '100%' }} value={rid} onChange={(e) => setPicked((p) => ({ ...p, [i]: e.target.value }))} aria-label="Which release">
