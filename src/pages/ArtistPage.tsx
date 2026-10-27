@@ -152,7 +152,7 @@ export default function ArtistPage() {
       <div style={{ marginTop: 28 }}>
         <div>
           <OldNotes type="artist" id={a.id} />
-          {a.bio && <p style={{ maxWidth: '68ch', marginTop: 0 }}>{bioOpen || a.bio.length < 420 ? a.bio : `${a.bio.slice(0, 420)}… `}{a.bio.length >= 420 && <button className="btn sm ghost" onClick={() => setBioOpen(!bioOpen)}>{bioOpen ? 'Less' : 'More'}</button>}</p>}
+          {a.bio && <p style={{ marginTop: 0 }}>{bioOpen || a.bio.length < 420 ? a.bio : `${a.bio.slice(0, 420)}… `}{a.bio.length >= 420 && <button className="btn sm ghost" onClick={() => setBioOpen(!bioOpen)}>{bioOpen ? 'Less' : 'More'}</button>}</p>}
           {discog.length > 0 && <div className="row" style={{ marginTop: 8 }}>
             <SortSelect value={discSort} onChange={(v) => { setDiscSort(v); setDiscRev(false); }} rev={discRev} onRev={setDiscRev} options={[['newest', 'Release date'], ['rating', 'Your rating'], ['title', 'Title A–Z']]} />
             <label className="row"><input type="checkbox" checked={grouped} onChange={(e) => setGrouped(e.target.checked)} /> Group by type</label>

@@ -93,27 +93,7 @@ export default function Library() {
         <h1 className="h-page">Library</h1><span className="spacer" />
         <button className="btn" onClick={() => setAdding(true)}>Add a release by hand</button>
       </div>
-      <div className="lib">
-        <aside className="filters panel" aria-label="Filters">
-          <label><span className="label">Title, artist or label</span><input className="input" style={{ width: '100%' }} value={get('q')} onChange={(e) => set('q', e.target.value)} placeholder="Filter…" /></label>
-          <div><span className="label">Type</span>
-            <MultiSelect label="Types" options={presentTypes} value={types} counts={typeCounts} onChange={(v) => set('type', v.join(',') || null)} /></div>
-          <label><span className="label">Decade</span><select className="select" style={{ width: '100%' }} value={get('decade')} onChange={(e) => set('decade', e.target.value)}>
-            <option value="">Any</option>{decades.map((d) => <option key={d} value={d}>{d}s</option>)}</select></label>
-          <div><span className="label">Years</span><div className="row" style={{ flexWrap: 'nowrap' }}>
-            <input className="input num" style={{ width: '100%' }} inputMode="numeric" placeholder="From" value={get('from')} onChange={(e) => set('from', e.target.value)} />
-            <input className="input num" style={{ width: '100%' }} inputMode="numeric" placeholder="To" value={get('to')} onChange={(e) => set('to', e.target.value)} /></div></div>
-          <label className="full-select"><span className="label">Your rating</span><RatingSelect value={get('rating')} onChange={(v) => set('rating', v)} /></label>
-          <label><span className="label">Producer</span><select className="select" style={{ width: '100%' }} value={get('producer')} onChange={(e) => set('producer', e.target.value)}>
-            <option value="">Any</option>{producers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
-          {labels.length > 0 && <label><span className="label">Label</span><select className="select" style={{ width: '100%' }} value={get('label')} onChange={(e) => set('label', e.target.value)}>
-            <option value="">Any</option>{labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>}
-          <label><span className="label">Links</span><select className="select" style={{ width: '100%' }} value={get('linked')} onChange={(e) => set('linked', e.target.value)}>
-            <option value="">Any</option><option value="yes">Linked to Apple Music</option><option value="no">Not linked yet</option></select></label>
-          <label className="row"><input type="checkbox" checked={get('fav') === '1'} onChange={(e) => set('fav', e.target.checked ? '1' : null)} /> Favourites only</label>
-          <label className="row"><input type="checkbox" checked={get('reviewed') === '1'} onChange={(e) => set('reviewed', e.target.checked ? '1' : null)} /> Has a review or notes</label>
-          {active > 0 && <button className="btn" onClick={() => setSp(new URLSearchParams(Object.fromEntries([...sp].filter(([k]) => k === 'view' || k === 'sort' || k === 'when'))), { replace: true })}>Clear filters</button>}
-        </aside>
+      <div>
         <section>
           <div className="row" style={{ marginBottom: 16 }}>
             <strong className="num">{rows.length.toLocaleString()}</strong><span className="muted">release{rows.length === 1 ? '' : 's'}</span>
@@ -124,6 +104,26 @@ export default function Library() {
             <div className="seg" role="group" aria-label="View">
               <button className={view === 'grid' ? 'on' : ''} onClick={() => set('view', null)}>Covers</button>
               <button className={view === 'table' ? 'on' : ''} onClick={() => set('view', 'table')}>Table</button></div>
+          </div>
+          <div className="filter-bar panel" aria-label="Filters">
+            <label><span className="label">Title, artist or label</span><input className="input" style={{ width: '100%' }} value={get('q')} onChange={(e) => set('q', e.target.value)} placeholder="Filter…" /></label>
+            <div><span className="label">Type</span>
+              <MultiSelect label="Types" options={presentTypes} value={types} counts={typeCounts} onChange={(v) => set('type', v.join(',') || null)} /></div>
+            <label><span className="label">Decade</span><select className="select" style={{ width: '100%' }} value={get('decade')} onChange={(e) => set('decade', e.target.value)}>
+              <option value="">Any</option>{decades.map((d) => <option key={d} value={d}>{d}s</option>)}</select></label>
+            <div><span className="label">Years</span><div className="row" style={{ flexWrap: 'nowrap' }}>
+              <input className="input num" style={{ width: '100%' }} inputMode="numeric" placeholder="From" value={get('from')} onChange={(e) => set('from', e.target.value)} />
+              <input className="input num" style={{ width: '100%' }} inputMode="numeric" placeholder="To" value={get('to')} onChange={(e) => set('to', e.target.value)} /></div></div>
+            <label className="full-select"><span className="label">Your rating</span><RatingSelect value={get('rating')} onChange={(v) => set('rating', v)} /></label>
+            <label><span className="label">Producer</span><select className="select" style={{ width: '100%' }} value={get('producer')} onChange={(e) => set('producer', e.target.value)}>
+              <option value="">Any</option>{producers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
+            {labels.length > 0 && <label><span className="label">Label</span><select className="select" style={{ width: '100%' }} value={get('label')} onChange={(e) => set('label', e.target.value)}>
+              <option value="">Any</option>{labels.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></label>}
+            <label><span className="label">Links</span><select className="select" style={{ width: '100%' }} value={get('linked')} onChange={(e) => set('linked', e.target.value)}>
+              <option value="">Any</option><option value="yes">Linked to Apple Music</option><option value="no">Not linked yet</option></select></label>
+            <div className="fb-checks"><label className="row"><input type="checkbox" checked={get('fav') === '1'} onChange={(e) => set('fav', e.target.checked ? '1' : null)} /> Favourites only</label>
+            <label className="row"><input type="checkbox" checked={get('reviewed') === '1'} onChange={(e) => set('reviewed', e.target.checked ? '1' : null)} /> Has a review or notes</label></div>
+            {active > 0 && <button className="btn" onClick={() => setSp(new URLSearchParams(Object.fromEntries([...sp].filter(([k]) => k === 'view' || k === 'sort' || k === 'when'))), { replace: true })}>Clear filters</button>}
           </div>
           {!rows.length ? <div className="empty">Nothing matches these filters.</div> : view === 'grid' ? (
             <div className="grid">{rows.slice(0, shown).map((r) => <ReleaseTile key={r.id} r={r} />)}</div>

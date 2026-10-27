@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import { MultiSelect, RatingSelect, ratingMatches, SortSelect, usePref, flip } from '../components/controls';
-import { AddToList, OldNotes, PageKicker, Cover, fmtDate, LinkBar, LinksEditor, Modal, QuickRate, ReleaseTile } from '../components/ui';
+import { MultiSelect, SortSelect, usePref, flip } from '../components/controls';
+import { AddToList, OldNotes, PageKicker, Cover, fmtDate, LinkBar, LinksEditor, Modal, ReleaseTile } from '../components/ui';
 import { linkQueue } from '../lib/queue';
 import { norm, useStore, type Index } from '../lib/store';
 import type { Label, Release } from '../lib/types';
@@ -23,7 +23,7 @@ export function Labels() {
   const { data, ix, upsert, say } = useStore();
   const nav = useNavigate();
   const [sp, setSp] = useSearchParams();
-  const q = sp.get('q') ?? ''; const sort = sp.get('sort') ?? 'recent'; const rating = sp.get('rating') ?? ''; const rev = sp.get('rev') === '1';
+  const q = sp.get('q') ?? ''; const sort = sp.get('sort') ?? 'recent'; const rev = sp.get('rev') === '1';
   const set = (k: string, v: string | null) => { const n = new URLSearchParams(sp); if (v) n.set(k, v); else n.delete(k); setSp(n, { replace: true }); };
   const sortTo = (k: string) => { const n = new URLSearchParams(sp); if (k === 'recent') n.delete('sort'); else n.set('sort', k); n.delete('rev'); setSp(n, { replace: true }); };
   const sortBy = (k: string) => (sort === k ? set('rev', rev ? null : '1') : sortTo(k));
@@ -34,14 +34,14 @@ export function Labels() {
 
   const rows = useMemo(() => {
     const n = norm(q);
-    return data.labels.filter((l) => (!n || norm([l.name, ...l.aliases].join(' ')).includes(n)) && ratingMatches(rating, ix.ann.get(`label:${l.id}`)?.rating))
-      .map((l) => ({ l, n: ix.releaseLabelsByLabel.get(l.id)?.length ?? 0, last: ix.lastByLabel.get(l.id) ?? '', mine: ix.ann.get(`label:${l.id}`)?.rating ?? 0 }))
+    return data.labels.filter((l) => (!n || norm([l.name, ...l.aliases].join(' ')).includes(n)))
+      .map((l) => ({ l, n: ix.releaseLabelsByLabel.get(l.id)?.length ?? 0, last: ix.lastByLabel.get(l.id) ?? '' }))
       .sort((x, y) => {
         const az = x.l.name.localeCompare(y.l.name, undefined, { sensitivity: 'base' });
-        return sort === 'az' ? az : sort === 'za' ? -az : sort === 'rating' ? y.mine - x.mine || az : sort === 'count' ? y.n - x.n || az : y.last.localeCompare(x.last) || az;
+        return sort === 'az' ? az : sort === 'za' ? -az : sort === 'count' ? y.n - x.n || az : y.last.localeCompare(x.last) || az;
       });
-  }, [data.labels, ix, q, sort, rating]);
-  const shownRows = flip(rows, rev, (r) => (sort === 'rating' ? r.mine > 0 : sort === 'count' ? r.n > 0 : sort === 'recent' ? !!r.last : true));
+  }, [data.labels, ix, q, sort]);
+  const shownRows = flip(rows, rev, (r) => (sort === 'count' ? r.n > 0 : sort === 'recent' ? !!r.last : true));
 
   const todo = data.releases.filter((r) => !r.ext.labels_at && !ix.releaseLabelsByRelease.get(r.id)?.length && (r.ext.deezer_id || r.ext.mbid || r.ext.apple_id)).map((r) => r.id);
   return (
@@ -52,8 +52,7 @@ export function Labels() {
       </div>
       <div className="row" style={{ marginBottom: 20 }}>
         <input className="input" style={{ width: 240 }} placeholder="Filter labels" value={q} onChange={(e) => set('q', e.target.value)} />
-        <SortSelect value={sort} onChange={sortTo} rev={rev} onRev={(r) => set('rev', r ? '1' : null)} options={[['recent', 'Most recent release'], ['az', 'A–Z'], ['rating', 'Your rating'], ['count', 'Most releases']]} />
-        <RatingSelect value={rating} onChange={(v) => set('rating', v)} label="Your rating of the label" />
+        <SortSelect value={sort} onChange={sortTo} rev={rev} onRev={(r) => set('rev', r ? '1' : null)} options={[['recent', 'Most recent release'], ['az', 'A–Z'], ['count', 'Most releases']]} />
         {view !== 'table' && <label className="row"><input type="checkbox" checked={showCounts} onChange={(e) => setShowCounts(e.target.checked)} /> Show counts</label>}
         <span className="muted num">{rows.length.toLocaleString()}</span>
         <div className="seg" role="group" aria-label="View"><button className={view !== 'table' ? 'on' : ''} onClick={() => setView('grid')}>Grid</button><button className={view === 'table' ? 'on' : ''} onClick={() => setView('table')}>Table</button></div>
@@ -66,12 +65,11 @@ export function Labels() {
         view === 'table' ? (
           <div className="table-wrap"><table className="table">
             <thead><tr><th className="thumb" /><th style={{ cursor: 'pointer' }} onClick={() => sortBy('az')}>Label{arrow('az', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('recent')}>Latest release{arrow('recent', false)}</th>
-              <th style={{ cursor: 'pointer', textAlign: 'right' }} onClick={() => sortBy('count')}>Releases{arrow('count', false)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('rating')}>Rating{arrow('rating', false)}</th></tr></thead>
+              <th style={{ cursor: 'pointer', textAlign: 'right' }} onClick={() => sortBy('count')}>Releases{arrow('count', false)}</th></tr></thead>
             <tbody>{shownRows.map(({ l, n, last }) => (
               <tr key={l.id}><td><Link to={`/label/${l.id}`}><Cover src={l.image_url} title={l.name} size={36} /></Link></td>
                 <td><Link to={`/label/${l.id}`} style={{ fontWeight: 600 }}>{l.name}</Link></td>
-                <td className="num muted small">{last ? fmtDate(last) : '—'}</td><td className="num" style={{ textAlign: 'right' }}>{n || ''}</td>
-                <td><QuickRate type="label" id={l.id} /></td></tr>))}</tbody>
+                <td className="num muted small">{last ? fmtDate(last) : '—'}</td><td className="num" style={{ textAlign: 'right' }}>{n || ''}</td></tr>))}</tbody>
           </table></div>
         ) : <div className="grid tight">{shownRows.map(({ l, n, last }) => (
           <div key={l.id} className="tile">
@@ -126,14 +124,14 @@ export default function LabelPage() {
       <div style={{ marginTop: 28 }}>
         <div>
           <OldNotes type="label" id={l.id} />
-          {l.bio && <p style={{ maxWidth: '68ch', marginTop: 0 }}>{l.bio}</p>}
+          {l.bio && <p style={{ marginTop: 0 }}>{l.bio}</p>}
           {roster.length > 0 && <>
             <h2 className="h-sec" style={{ marginTop: 0 }}>Artists</h2>
             <div className="row" style={{ gap: 6 }}>{roster.map((x) => { const a = ix.artists.get(x.id); return a && <Link key={a.id} className="chip" to={`/artist/${a.id}`} title={x.signed ? 'Marked as signed' : `${x.n} release${x.n === 1 ? '' : 's'}`}>{a.name}</Link>; })}</div>
           </>}
           <h2 className="h-sec">Releases</h2>
           {releases.length > 0 && <div className="row" style={{ marginBottom: 14 }}>
-            <SortSelect value={sort} onChange={(v) => { setSort(v); setRev(false); }} rev={rev} onRev={setRev} options={[['newest', 'Release date'], ['rating', 'Your rating'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z']]} />
+            <SortSelect value={sort} onChange={(v) => { setSort(v); setRev(false); }} rev={rev} onRev={setRev} options={[['newest', 'Release date'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z']]} />
             <div style={{ minWidth: 180 }}><MultiSelect label="Types" options={[...new Set(releases.map((r) => r.type))].sort()} value={types} onChange={setTypes} /></div>
           </div>}
           {shownSorted.length ? <div className="grid tight">{shownSorted.map((r) => <ReleaseTile key={r.id} r={r} />)}</div> : <div className="empty">No releases on this label yet. Add it on a release with Edit.</div>}

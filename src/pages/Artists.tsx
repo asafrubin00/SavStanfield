@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { RatingSelect, ratingMatches, SortSelect, usePref } from '../components/controls';
-import { ArtistTile, Cover, fmtDate, QuickRate } from '../components/ui';
+import { SortSelect, usePref } from '../components/controls';
+import { ArtistTile, Cover, fmtDate } from '../components/ui';
 import type { Artist, Release } from '../lib/types';
 import { linkQueue } from '../lib/queue';
 import { usePageState } from '../lib/nav';
@@ -9,7 +9,7 @@ import { norm, shownInArtists, useStore } from '../lib/store';
 import { ArtistForm } from './ArtistPage';
 
 export const PEOPLE_SORTS: [string, string][] = [
-  ['recent', 'Most recent release'], ['az', 'A–Z'], ['za', 'Z–A'], ['rating', 'Your rating'], ['avg', 'Your average for their releases'], ['count', 'Most releases'],
+  ['recent', 'Most recent release'], ['az', 'A–Z'], ['za', 'Z–A'], ['avg', 'Your average for their releases'], ['count', 'Most releases'],
 ];
 
 export default function Artists({ producers }: { producers: boolean }) {
@@ -17,7 +17,6 @@ export default function Artists({ producers }: { producers: boolean }) {
   const [sp, setSp] = useSearchParams();
   const q = sp.get('q') ?? '';
   const sort = sp.get('sort') ?? 'recent';
-  const rating = sp.get('rating') ?? '';
   const favOnly = sp.get('fav') === '1';
   const who = sp.get('who') ?? 'shown';
   const rev = sp.get('rev') === '1';
@@ -35,7 +34,7 @@ export default function Artists({ producers }: { producers: boolean }) {
     const out = data.artists
       .filter((a) => (!producers || a.is_producer) && (!n || norm([a.name, ...a.aliases].join(' ')).includes(n)))
       .filter((a) => producers || who === 'all' || shownInArtists(ix, a) === (who === 'shown'))
-      .filter((a) => { const an = ix.ann.get(`artist:${a.id}`); return (!favOnly || an?.favorite) && ratingMatches(rating, an?.rating); })
+      .filter((a) => { const an = ix.ann.get(`artist:${a.id}`); return !favOnly || an?.favorite; })
       .map((a) => {
         const cr = ix.creditsByArtist.get(a.id) ?? [];
         const count = producers
@@ -50,14 +49,13 @@ export default function Artists({ producers }: { producers: boolean }) {
           const r = rid ? ix.releases.get(rid) : undefined;
           if (r && day(r) <= today && day(r) > day(lastRel)) lastRel = r;
         }
-        return { a, count, lastRel, rated: ratings.length, last: last.get(a.id) ?? '', mine: ix.ann.get(`artist:${a.id}`)?.rating ?? 0, avg: ratings.length ? ratings.reduce((s, x) => s + x, 0) / ratings.length : 0 };
+        return { a, count, lastRel, rated: ratings.length, last: last.get(a.id) ?? '', avg: ratings.length ? ratings.reduce((s, x) => s + x, 0) / ratings.length : 0 };
       })
       .sort((x, y) => {
         const az = x.a.name.localeCompare(y.a.name, undefined, { sensitivity: 'base' });
         switch (sort) {
           case 'az': return az;
           case 'za': return -az;
-          case 'rating': return y.mine - x.mine || az;
           case 'avg': return y.avg - x.avg || az;
           case 'count': return y.count - x.count || az;
           default: return y.last.localeCompare(x.last) || az; // most recent release, ties A–Z
@@ -66,9 +64,9 @@ export default function Artists({ producers }: { producers: boolean }) {
 ;
     if (!rev) return out;
     // Flipped: reverse the ones that have a value, keep blanks (no releases, unrated) at the end
-    const has = (r: typeof out[0]) => (sort === 'avg' ? r.avg > 0 : sort === 'rating' ? r.mine > 0 : sort === 'count' ? r.count > 0 : sort === 'az' || sort === 'za' ? true : !!r.last);
+    const has = (r: typeof out[0]) => (sort === 'avg' ? r.avg > 0 : sort === 'count' ? r.count > 0 : sort === 'az' || sort === 'za' ? true : !!r.last);
     return [...out.filter(has).reverse(), ...out.filter((r) => !has(r))];
-  }, [data.artists, ix, q, sort, rating, favOnly, producers, who, rev]);
+  }, [data.artists, ix, q, sort, favOnly, producers, who, rev]);
   const setShow = (a: Artist, v: string) => upsert('artists', [{ ...a, ext: { ...a.ext, show_in_artists: v || undefined }, updated_at: new Date().toISOString() }]);
 
   const sub = (r: typeof rows[0]) => [
@@ -89,7 +87,6 @@ export default function Artists({ producers }: { producers: boolean }) {
       <div className="row" style={{ marginBottom: 20 }}>
         <input className="input" style={{ width: 240 }} placeholder={`Filter ${producers ? 'producers' : 'artists'}`} value={q} onChange={(e) => set('q', e.target.value)} />
         <SortSelect value={sort} options={PEOPLE_SORTS} onChange={(v) => { const n = new URLSearchParams(sp); if (v === 'recent') n.delete('sort'); else n.set('sort', v); n.delete('rev'); setSp(n, { replace: true }); }} rev={rev} onRev={(r) => set('rev', r ? '1' : null)} />
-        <RatingSelect value={rating} onChange={(v) => set('rating', v)} label="Your rating of the artist" />
         <label className="row"><input type="checkbox" checked={favOnly} onChange={(e) => set('fav', e.target.checked ? '1' : null)} /> Favourites</label>
         {!producers && <select className="select" value={who} onChange={(e) => set('who', e.target.value === 'shown' ? null : e.target.value)} aria-label="Which artists" title="Hidden: people with no release of their own in your library (mostly producers), unless you've set them to Always">
           <option value="shown">Shown artists</option><option value="hidden">Hidden (producers etc.)</option><option value="all">Everyone</option></select>}
@@ -105,7 +102,6 @@ export default function Artists({ producers }: { producers: boolean }) {
               <th onClick={() => sortBy('recent')} style={{ cursor: 'pointer' }}>{producers ? 'Latest produced' : 'Latest release'}{sort === 'recent' ? (rev ? ' ↑' : ' ↓') : ''}</th>
               <th onClick={() => sortBy('count')} style={{ cursor: 'pointer', textAlign: 'right' }}>{producers ? 'Produced' : 'Releases'}{sort === 'count' ? (rev ? ' ↑' : ' ↓') : ''}</th>
               <th onClick={() => sortBy('avg')} style={{ cursor: 'pointer' }}>Your average{sort === 'avg' ? (rev ? ' ↑' : ' ↓') : ''}</th>
-              <th onClick={() => sortBy('rating')} style={{ cursor: 'pointer' }}>Rating{sort === 'rating' ? (rev ? ' ↑' : ' ↓') : ''}</th>
               {!producers && <th title="Auto: shown if they have a release of their own in your library">Show in Artists</th>}</tr></thead>
             <tbody>{rows.slice(0, shown).map((r) => (
               <tr key={r.a.id}>
@@ -114,7 +110,6 @@ export default function Artists({ producers }: { producers: boolean }) {
                 <td className="small">{r.lastRel ? <><span className="num muted">{r.lastRel.date ? fmtDate(r.lastRel.date) : r.lastRel.year}</span> · <Link to={`/release/${r.lastRel.id}`}>{r.lastRel.title}</Link></> : <span className="muted">—</span>}</td>
                 <td className="num" style={{ textAlign: 'right' }}>{r.count || ''}</td>
                 <td className="num small">{r.avg ? <>{r.avg.toFixed(1)} ★ <span className="muted">({r.rated})</span></> : <span className="muted">—</span>}</td>
-                <td><QuickRate type="artist" id={r.a.id} /></td>
                 {!producers && <td><select className="select" style={{ padding: '3px 6px' }} value={(r.a.ext.show_in_artists as string) ?? ''} onChange={(e) => void setShow(r.a, e.target.value)} aria-label={`Show ${r.a.name} in Artists`}>
                   <option value="">Auto ({(ix.creditsByArtist.get(r.a.id) ?? []).some((c) => c.role === 'primary' && c.release_id) ? 'shown' : 'hidden'})</option><option value="always">Always</option><option value="never">Never</option></select></td>}
               </tr>))}</tbody>
