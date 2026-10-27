@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { MultiSelect, RatingSelect, ratingMatches, SortSelect, usePref, flip } from '../components/controls';
-import { AddToList, AnnotationPanel, Cover, fmtDate, LinkBar, LinksEditor, Modal, QuickRate, ReleaseTile } from '../components/ui';
+import { AddToList, OldNotes, PageKicker, Cover, fmtDate, LinkBar, LinksEditor, Modal, QuickRate, ReleaseTile } from '../components/ui';
 import { linkQueue } from '../lib/queue';
 import { norm, useStore, type Index } from '../lib/store';
 import type { Label, Release } from '../lib/types';
@@ -112,20 +112,20 @@ export default function LabelPage() {
       <div className="hero" style={{ gridTemplateColumns: 'minmax(160px, 240px) 1fr' }}>
         <Cover src={l.image_url} title={l.name} eager />
         <div>
-          <div className="muted" style={{ marginBottom: 8 }}>Label{l.aliases.length ? ` · also ${l.aliases.join(', ')}` : ''}</div>
+          <PageKicker type="label" id={l.id} label={<>Label{l.aliases.length ? ` · also ${l.aliases.join(', ')}` : ''}</>} onEdit={() => setEditing(true)} />
           <h1 className="hero-name">{l.name}</h1>
           <div className="hero-meta">
             {years.length > 0 && <span className="num">{Math.min(...years)}–{Math.max(...years)}</span>}
             {ix.lastByLabel.get(l.id) && <span>Latest release {fmtDate(ix.lastByLabel.get(l.id))}</span>}
-            <QuickRate type="label" id={l.id} />
           </div>
         </div>
       </div>
       <div style={{ margin: '22px 0' }}><LinkBar links={l.links} kind="label" name={l.name} onEdit={() => setEditLinks(true)} /></div>
-      <div className="row"><AddToList type="label" id={l.id} /><button className="btn" onClick={() => setEditing(true)}>Edit</button><button className="btn" onClick={() => setMerging(true)}>Merge…</button></div>
+      <div className="row"><AddToList type="label" id={l.id} /><button className="btn" onClick={() => setMerging(true)}>Merge…</button></div>
 
-      <div className="two" style={{ marginTop: 28 }}>
+      <div style={{ marginTop: 28 }}>
         <div>
+          <OldNotes type="label" id={l.id} />
           {l.bio && <p style={{ maxWidth: '68ch', marginTop: 0 }}>{l.bio}</p>}
           {roster.length > 0 && <>
             <h2 className="h-sec" style={{ marginTop: 0 }}>Artists</h2>
@@ -137,10 +137,7 @@ export default function LabelPage() {
             <div style={{ minWidth: 180 }}><MultiSelect label="Types" options={[...new Set(releases.map((r) => r.type))].sort()} value={types} onChange={setTypes} /></div>
           </div>}
           {shownSorted.length ? <div className="grid tight">{shownSorted.map((r) => <ReleaseTile key={r.id} r={r} />)}</div> : <div className="empty">No releases on this label yet. Add it on a release with Edit.</div>}
-        </div>
-        <div className="stack">
-          <AnnotationPanel type="label" id={l.id} />
-          <button className="btn danger" onClick={async () => { if (confirm(`Delete the label ${l.name}? Releases stay; they just lose this label.`)) { await st.deleteLabel(l.id); nav('/labels'); } }}>Delete label</button>
+          <div style={{ marginTop: 40 }}><button className="btn danger" onClick={async () => { if (confirm(`Delete the label ${l.name}? Releases stay; they just lose this label.`)) { await st.deleteLabel(l.id); nav('/labels'); } }}>Delete label</button></div>
         </div>
       </div>
 

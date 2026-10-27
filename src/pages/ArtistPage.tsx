@@ -2,7 +2,7 @@ import { fetchMembers, groupMembers, groupsOf, linkMembers, years } from '../lib
 import PeopleInput from '../components/PeopleInput';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, LinkBar, LinksEditor, Modal, QuickRate, ReleaseTile } from '../components/ui';
+import { AddToList, OldNotes, PageKicker, Cover, Credits, fmtDate, LinkBar, LinksEditor, Modal, QuickRate, ReleaseTile } from '../components/ui';
 import { autoLinkArtist } from '../lib/enrich';
 import { parseArtistCredit } from '../lib/importSheet';
 import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists, type AppleAlbum, type MBGroup } from '../lib/sources';
@@ -100,15 +100,22 @@ export default function ArtistPage() {
       <div className="hero">
         <Cover src={a.image_url} title={a.name} eager />
         <div>
-          <div className="muted" style={{ marginBottom: 8 }}>{a.is_producer ? 'Artist and producer' : 'Artist'}{a.aliases.length ? ` · also ${a.aliases.join(', ')}` : ''}</div>
+          <PageKicker type="artist" id={a.id} label={<>{a.is_producer ? 'Artist and producer' : 'Artist'}{a.aliases.length ? ` · also ${a.aliases.join(', ')}` : ''}</>} onEdit={() => setEditing(true)} />
           <h1 className="hero-name">{a.name}</h1>
-          {memberOf.length > 0 && <div style={{ marginTop: 10, fontSize: 17 }}><span className="muted">Member of </span>{memberOf.map(({ group, m }, i) => <span key={group.id}>{i ? ', ' : ''}<Link to={`/artist/${group.id}`} style={{ fontWeight: 600 }}>{group.name}</Link>{years(m) && <span className="muted small"> ({years(m)})</span>}</span>)}</div>}
+          {members.length > 0 && <div className="hero-people"><span className="muted">Members </span>{members.map((m, i) => { const ma = m.id ? ix.artists.get(m.id) : undefined; return (
+            <span key={`${m.name}${i}`} style={m.end ? { opacity: 0.75 } : undefined}>{i ? ', ' : ''}{ma ? <Link to={`/artist/${ma.id}`} style={{ fontWeight: 600 }}>{ma.name}</Link> : <span>{m.name}</span>}
+              {years(m) && <span className="muted small"> ({years(m)})</span>}
+              {!ma && <button className="btn sm ghost" title={`Add ${m.name} to your library`} aria-label={`Add ${m.name} to library`} onClick={async () => {
+                const { artist: na } = st.ensureArtist(m.name, { ext: m.mbid ? { mbid: m.mbid } : {} });
+                await st.upsert('artists', [{ ...a, ext: { ...a.ext, members: members.map((x, j) => (j === i ? { ...x, id: na.id } : x)) }, updated_at: now() }]);
+                void st.findFeaturesFor(na); st.say(`Added ${m.name}`);
+              }}>+</button>}</span>); })}</div>}
+          {memberOf.length > 0 && <div className="hero-people"><span className="muted">Member of </span>{memberOf.map(({ group, m }, i) => <span key={group.id}>{i ? ', ' : ''}<Link to={`/artist/${group.id}`} style={{ fontWeight: 600 }}>{group.name}</Link>{years(m) && <span className="muted small"> ({years(m)})</span>}</span>)}</div>}
           <div className="hero-meta">
             {showCounts && <span>{discog.length} release{discog.length === 1 ? '' : 's'}</span>}
             {showCounts && produced.length > 0 && <span>{produced.length} produced</span>}
             {ix.lastByArtist.get(a.id) && <span>Latest release {fmtDate(ix.lastByArtist.get(a.id))}</span>}
             {avg !== null && <span className="num">Your average {avg.toFixed(1)} ★ across {rated.length}</span>}
-            <QuickRate type="artist" id={a.id} />
           </div>
           {labelsHere.length > 0 && <div className="row" style={{ marginTop: 12, gap: 6 }}>
             {labelsHere.slice(0, 8).map(({ label, manual, n }) => <Link key={label.id} className="chip" to={`/label/${label.id}`} title={manual ? 'Set by you' : `${n} release${n === 1 ? '' : 's'}`}>{label.name}</Link>)}
@@ -121,7 +128,6 @@ export default function ArtistPage() {
         <button className="btn" onClick={() => setDisco(true)}>Import discography</button>
         <button className="btn" disabled={!discog.some((r) => !r.links.apple)} onClick={() => { linkQueue.add('release', discog.filter((r) => !r.links.apple || !r.artwork_url).map((r) => r.id)); say('Linking releases in the background'); }}>Link all releases</button>
         <AddToList type="artist" id={a.id} />
-        <button className="btn" onClick={() => setEditing(true)}>Edit</button>
         <button className="btn" onClick={() => setMerging(true)}>Merge…</button>
         <button className="btn" disabled={!!busy} title="Looks up band members on MusicBrainz" onClick={async () => {
           if (a.ext.members_manual && !confirm('You’ve edited the members by hand. Replace them with what MusicBrainz has?')) return;
@@ -143,8 +149,9 @@ export default function ArtistPage() {
         {busy && <span className="small muted">{busy}</span>}
       </div>
 
-      <div className="two" style={{ marginTop: 28 }}>
+      <div style={{ marginTop: 28 }}>
         <div>
+          <OldNotes type="artist" id={a.id} />
           {a.bio && <p style={{ maxWidth: '68ch', marginTop: 0 }}>{bioOpen || a.bio.length < 420 ? a.bio : `${a.bio.slice(0, 420)}… `}{a.bio.length >= 420 && <button className="btn sm ghost" onClick={() => setBioOpen(!bioOpen)}>{bioOpen ? 'Less' : 'More'}</button>}</p>}
           {discog.length > 0 && <div className="row" style={{ marginTop: 8 }}>
             <SortSelect value={discSort} onChange={(v) => { setDiscSort(v); setDiscRev(false); }} rev={discRev} onRev={setDiscRev} options={[['newest', 'Release date'], ['rating', 'Your rating'], ['title', 'Title A–Z']]} />
@@ -193,25 +200,7 @@ export default function ArtistPage() {
             <h2 className="h-sec">Seen live</h2>
             {concerts.map((c) => <div key={c.id} className="row" style={{ padding: '4px 0' }}><span className="num muted">{fmtDate(c.date)}</span><strong>{c.tour}</strong><span className="muted">{c.venue}, {c.location}</span></div>)}
           </section>}
-        </div>
-        <div className="stack">
-          {(members.length > 0 || a.ext.mb_type === 'Group') && <div className="panel">
-            <div className="row" style={{ marginBottom: 6 }}><span className="label" style={{ margin: 0 }}>Members</span><span className="spacer" />{a.ext.members_manual ? <span className="small muted" title="Set by hand — automatic lookups leave it alone">edited</span> : null}</div>
-            {members.map((m, i) => { const ma = m.id ? ix.artists.get(m.id) : undefined; return (
-              <div key={`${m.name}${i}`} className="row" style={{ padding: '4px 0', flexWrap: 'nowrap', opacity: m.end ? 0.7 : 1 }}>
-                <Cover src={ma?.image_url} title={m.name} size={34} round />
-                <span style={{ minWidth: 0, flex: 1 }}>{ma ? <Link to={`/artist/${ma.id}`} style={{ fontWeight: 600 }}>{ma.name}</Link> : <span>{m.name}</span>}
-                  {years(m) && <div className="small muted">{years(m)}{m.end ? ' · former' : ''}</div>}</span>
-                {!ma && <button className="btn sm ghost" title={`Add ${m.name} to your library`} aria-label={`Add ${m.name} to library`} onClick={async () => {
-                  const { artist: na } = st.ensureArtist(m.name, { ext: m.mbid ? { mbid: m.mbid } : {} });
-                  await st.upsert('artists', [{ ...a, ext: { ...a.ext, members: members.map((x, j) => (j === i ? { ...x, id: na.id } : x)) }, updated_at: now() }]);
-                  void st.findFeaturesFor(na); st.say(`Added ${m.name}`);
-                }}>+</button>}
-              </div>); })}
-            {!members.length && <div className="small muted">No members found.</div>}
-          </div>}
-          <AnnotationPanel type="artist" id={a.id} />
-          <button className="btn danger" onClick={async () => { if (confirm(`Delete ${a.name}? Their releases stay in your library.`)) { await st.deleteArtist(a.id); nav('/artists'); } }}>Delete artist</button>
+          <div style={{ marginTop: 40 }}><button className="btn danger" onClick={async () => { if (confirm(`Delete ${a.name}? Their releases stay in your library.`)) { await st.deleteArtist(a.id); nav('/artists'); } }}>Delete artist</button></div>
         </div>
       </div>
 

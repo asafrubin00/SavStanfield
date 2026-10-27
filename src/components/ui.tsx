@@ -215,3 +215,24 @@ export function ArtistTile({ a, sub }: { a: Artist; sub?: string }) {
 export const LINK_KEYS = LINK_META.map((m) => m.key) as LinkKey[];
 export const fmtDate = (d?: string | null) => d ? new Date(d + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
 export const fmtMs = (ms?: number | null) => ms ? `${Math.floor(ms / 60000)}:${String(Math.round((ms % 60000) / 1000)).padStart(2, '0')}` : '';
+
+/** Top-left of an artist / producer / label page: what it is, a heart to favourite it, and Edit. */
+export function PageKicker({ type, id, label, onEdit }: { type: EntityType; id: string; label: ReactNode; onEdit: () => void }) {
+  const { annotation, annotate } = useStore();
+  const a = annotation(type, id);
+  return (
+    <div className="kicker">
+      <span className="muted">{label}</span>
+      <Fav on={!!a?.favorite} onToggle={() => annotate(type, id, { favorite: !a?.favorite })} />
+      <button type="button" className="btn sm" onClick={onEdit}>Edit</button>
+    </div>
+  );
+}
+
+/** Reviews or notes written on a person or label before those boxes were removed — shown so nothing is hidden. */
+export function OldNotes({ type, id }: { type: EntityType; id: string }) {
+  const { annotation } = useStore();
+  const a = annotation(type, id);
+  if (!a?.review && !a?.notes) return null;
+  return <div className="small muted" style={{ maxWidth: '68ch', whiteSpace: 'pre-wrap', margin: '0 0 16px' }}>{a.review}{a.review && a.notes ? '\n\n' : ''}{a.notes}</div>;
+}

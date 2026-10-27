@@ -273,3 +273,8 @@ details summary { cursor: pointer; }
 .brand-name { display: flex; flex-direction: column; font-weight: 900; font-variation-settings: 'wdth' 62; font-size: 23px; line-height: .88; letter-spacing: -.005em; text-transform: uppercase; }
 .brand-name span:first-child { color: var(--accent); }
 .brand:hover img { box-shadow: 0 0 0 2px var(--bg), 0 0 0 3.5px var(--ink); }
+
+.kicker { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.kicker .fav { font-size: 22px; }
+.hero-people { margin-top: 10px; font-size: 17px; line-height: 1.5; }
+.hero-people .btn { padding: 0 5px; margin-left: 2px; }
