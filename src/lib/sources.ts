@@ -598,3 +598,21 @@ export async function wikiCover(url: string): Promise<string | undefined> {
   const u = Object.values(r.query?.pages ?? {})[0]?.imageinfo?.[0]?.url;
   return u?.split('?')[0];
 }
+
+
+// ——— Band membership (MusicBrainz "member of band") ———
+export interface MBMember { mbid: string; name: string; begin?: string; end?: string; ended?: boolean }
+/** An artist's type ("Group", "Person"…) and, for a group, its members with years. */
+export async function mbArtistMembers(mbid: string): Promise<{ type?: string; members: MBMember[] }> {
+  const r = await call<{ type?: string; relations?: { type: string; direction: string; begin?: string | null; end?: string | null; ended?: boolean; artist?: { id: string; name: string } }[] }>('mb', `artist/${mbid}`, { inc: 'artist-rels' });
+  const members = new Map<string, MBMember>();
+  for (const rel of r.relations ?? []) {
+    if (rel.type !== 'member of band' || rel.direction !== 'backward' || !rel.artist) continue;
+    const prev = members.get(rel.artist.id);
+    // Someone can have several stints; keep the earliest start and latest end
+    const begin = [prev?.begin, rel.begin ?? undefined].filter(Boolean).sort()[0];
+    const end = prev && (!prev.end || !rel.end) && !(prev.ended && rel.ended) ? undefined : [prev?.end, rel.end ?? undefined].filter(Boolean).sort().pop();
+    members.set(rel.artist.id, { mbid: rel.artist.id, name: rel.artist.name, begin: begin ?? undefined, end, ended: (prev?.ended ?? true) && !!rel.ended });
+  }
+  return { type: r.type, members: [...members.values()] };
+}

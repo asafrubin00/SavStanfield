@@ -372,6 +372,9 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     await upsert('list_items', d.list_items.filter((x) => x.entity_type === 'artist' && x.entity_id === from.id).map((x) => ({ ...x, entity_id: into.id })));
     await upsert('concerts', d.concerts.filter((c) => c.artist_id === from.id).map((c) => ({ ...c, artist_id: into.id })));
     await upsert('artist_labels', d.artist_labels.filter((x) => x.artist_id === from.id).map((x) => ({ ...x, artist_id: into.id }))).catch(() => undefined);
+    // Groups that listed the old entry as a member now point at the one we kept
+    const groups = d.artists.filter((g) => ((g.ext.members as { id?: string }[] | undefined) ?? []).some((m) => m.id === from.id));
+    if (groups.length) await upsert('artists', groups.map((g) => ({ ...g, ext: { ...g.ext, members: (g.ext.members as { id?: string }[]).map((m) => (m.id === from.id ? { ...m, id: into.id } : m)) }, updated_at: now() })));
     if (ann) await remove('annotations', [ann.id]);
     await remove('artists', [from.id]);
   }, [upsert, remove]);

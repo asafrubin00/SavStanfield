@@ -4,7 +4,7 @@ import type { Artist, Release, Track } from './types';
 import { norm, now, uid } from './util';
 
 /** Background linking queue: works through artists/releases, pacing itself per API. */
-type Job = { kind: 'artist' | 'release' | 'release2' | 'release3' | 'labels' | 'tracks' | 'recheck'; id: string };
+type Job = { kind: 'artist' | 'release' | 'release2' | 'release3' | 'labels' | 'tracks' | 'recheck' | 'members'; id: string };
 interface Deps {
   getArtist(id: string): Artist | undefined;
   getRelease(id: string): Release | undefined;
@@ -16,6 +16,7 @@ interface Deps {
   saveTracks(rows: Track[]): Promise<void>;
   replaceTracklist(r: Release): Promise<unknown>;
   refreshLabels(r: Release): Promise<string[]>;
+  findMembers(a: Artist): Promise<{ members: unknown[] | null; mbid?: string; type?: string }>;
 }
 
 let deps: Deps | null = null;
@@ -49,7 +50,15 @@ async function run() {
         const job = jobs.shift()!;
         queued.delete(`${job.kind}:${job.id}`);
         try {
-          if (job.kind === 'recheck') {
+          if (job.kind === 'members') {
+            const a = deps!.getArtist(job.id); if (!a || a.ext.members_manual) continue;
+            const res = await deps!.findMembers(a);
+            const cur = deps!.getArtist(job.id) ?? a;
+            const ext: Record<string, unknown> = { ...cur.ext, members_at: new Date().toISOString(), mb_type: res.type ?? cur.ext.mb_type, mbid: cur.ext.mbid ?? res.mbid };
+            if (res.members) { ext.members = res.members; state.matched++; }
+            await deps!.saveArtist({ ...cur, ext: ext as Artist['ext'] });
+            state.last = `${a.name}${res.members ? `: ${res.members.length} members` : ''}`;
+          } else if (job.kind === 'recheck') {
             const r = deps!.getRelease(job.id); if (!r) continue;
             const res = await recheckRelease(r, deps!.releaseArtistName(r));
             const next = { ...deps!.getRelease(job.id)!, ...res.patch } as Release;

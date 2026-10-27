@@ -1,3 +1,5 @@
+import { fetchMembers, groupMembers, groupsOf, linkMembers, years } from '../lib/members';
+import PeopleInput from '../components/PeopleInput';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, LinkBar, LinksEditor, Modal, QuickRate, ReleaseTile } from '../components/ui';
@@ -29,6 +31,9 @@ export default function ArtistPage() {
   const [disco, setDisco] = useState(false);
   const [featBusy, setFeatBusy] = useState(false);
   const [moreOpen, setMoreOpen] = usePref('artist.moreOpen', false);
+  const cur = ix.artists.get(id!);
+  const members = cur ? linkMembers(ix, groupMembers(cur)) : [];
+  const memberOf = cur ? groupsOf(ix, cur.id) : [];
   const splitNames = (ix.artists.get(id!)?.name ?? '').split(/\s*(?:&|,|\bx\b|\band\b|\bfeat\.?|\bft\.?|\bwith\b)\s*/i).map((s) => s.trim()).filter(Boolean);
   const [merging, setMerging] = useState(false);
   const [bioOpen, setBioOpen] = useState(false);
@@ -97,6 +102,7 @@ export default function ArtistPage() {
         <div>
           <div className="muted" style={{ marginBottom: 8 }}>{a.is_producer ? 'Artist and producer' : 'Artist'}{a.aliases.length ? ` · also ${a.aliases.join(', ')}` : ''}</div>
           <h1 className="hero-name">{a.name}</h1>
+          {memberOf.length > 0 && <div style={{ marginTop: 10, fontSize: 17 }}><span className="muted">Member of </span>{memberOf.map(({ group, m }, i) => <span key={group.id}>{i ? ', ' : ''}<Link to={`/artist/${group.id}`} style={{ fontWeight: 600 }}>{group.name}</Link>{years(m) && <span className="muted small"> ({years(m)})</span>}</span>)}</div>}
           <div className="hero-meta">
             {showCounts && <span>{discog.length} release{discog.length === 1 ? '' : 's'}</span>}
             {showCounts && produced.length > 0 && <span>{produced.length} produced</span>}
@@ -117,6 +123,15 @@ export default function ArtistPage() {
         <AddToList type="artist" id={a.id} />
         <button className="btn" onClick={() => setEditing(true)}>Edit</button>
         <button className="btn" onClick={() => setMerging(true)}>Merge…</button>
+        <button className="btn" disabled={!!busy} title="Looks up band members on MusicBrainz" onClick={async () => {
+          if (a.ext.members_manual && !confirm('You’ve edited the members by hand. Replace them with what MusicBrainz has?')) return;
+          setBusy('Looking up members…');
+          try {
+            const res = await fetchMembers(ix, a);
+            await save({ ext: { ...a.ext, mbid: a.ext.mbid ?? res.mbid, mb_type: res.type ?? a.ext.mb_type, members_at: now(), ...(res.members ? { members: res.members, members_manual: false } : {}) } });
+            say(res.members ? `${res.members.length} members found` : res.type && res.type !== 'Group' ? `MusicBrainz lists ${a.name} as a ${res.type.toLowerCase()}, not a group` : 'No members found on MusicBrainz');
+          } catch (e) { say((e as Error).message); } finally { setBusy(''); }
+        }}>Find members</button>
         {splitNames.length > 1 && <button className="btn" title={`Credit everything to ${splitNames.join(' and ')} separately`} onClick={async () => {
           if (!confirm(`Split “${a.name}” into ${splitNames.join(' + ')}? Everything credited to it goes to each of them, and this joint entry is removed.`)) return;
           const parts = splitNames.map((n) => st.ensureArtist(n).artist);
@@ -180,6 +195,21 @@ export default function ArtistPage() {
           </section>}
         </div>
         <div className="stack">
+          {(members.length > 0 || a.ext.mb_type === 'Group') && <div className="panel">
+            <div className="row" style={{ marginBottom: 6 }}><span className="label" style={{ margin: 0 }}>Members</span><span className="spacer" />{a.ext.members_manual ? <span className="small muted" title="Set by hand — automatic lookups leave it alone">edited</span> : null}</div>
+            {members.map((m, i) => { const ma = m.id ? ix.artists.get(m.id) : undefined; return (
+              <div key={`${m.name}${i}`} className="row" style={{ padding: '4px 0', flexWrap: 'nowrap', opacity: m.end ? 0.7 : 1 }}>
+                <Cover src={ma?.image_url} title={m.name} size={34} round />
+                <span style={{ minWidth: 0, flex: 1 }}>{ma ? <Link to={`/artist/${ma.id}`} style={{ fontWeight: 600 }}>{ma.name}</Link> : <span>{m.name}</span>}
+                  {years(m) && <div className="small muted">{years(m)}{m.end ? ' · former' : ''}</div>}</span>
+                {!ma && <button className="btn sm ghost" title={`Add ${m.name} to your library`} aria-label={`Add ${m.name} to library`} onClick={async () => {
+                  const { artist: na } = st.ensureArtist(m.name, { ext: m.mbid ? { mbid: m.mbid } : {} });
+                  await st.upsert('artists', [{ ...a, ext: { ...a.ext, members: members.map((x, j) => (j === i ? { ...x, id: na.id } : x)) }, updated_at: now() }]);
+                  void st.findFeaturesFor(na); st.say(`Added ${m.name}`);
+                }}>+</button>}
+              </div>); })}
+            {!members.length && <div className="small muted">No members found.</div>}
+          </div>}
           <AnnotationPanel type="artist" id={a.id} />
           <button className="btn danger" onClick={async () => { if (confirm(`Delete ${a.name}? Their releases stay in your library.`)) { await st.deleteArtist(a.id); nav('/artists'); } }}>Delete artist</button>
         </div>
@@ -199,11 +229,19 @@ export function ArtistForm({ artist, onClose }: { artist?: Artist; onClose: () =
   const manualLabels = artist ? (ix.artistLabelsByArtist.get(artist.id) ?? []).map((x) => ix.labels.get(x.label_id)?.name).filter(Boolean).join(', ') : '';
   const [labels, setLabels] = useState(manualLabels);
   const [f, setF] = useState({ name: artist?.name ?? '', aliases: artist?.aliases.join(', ') ?? '', image_url: artist?.image_url ?? '', bio: artist?.bio ?? '', is_producer: artist?.is_producer ?? false });
+  const oldMembers = artist ? groupMembers(artist) : [];
+  const [members, setMembers] = useState(() => oldMembers.map((m) => (m.id ? ix.artists.get(m.id)?.name ?? m.name : m.name)));
   return (
     <Modal title={artist ? 'Edit artist' : 'Add an artist'} onClose={onClose}>
       <form className="form-grid" onSubmit={async (e) => {
         e.preventDefault(); if (!f.name.trim()) return;
-        const a: Artist = { ...(artist ?? { id: uid(), links: {}, ext: {}, created_at: now() }), name: f.name.trim(), aliases: f.aliases.split(',').map((s) => s.trim()).filter(Boolean), image_url: f.image_url || null, bio: f.bio || null, is_producer: f.is_producer, updated_at: now() } as Artist;
+        const before = oldMembers.map((m) => (m.id ? ix.artists.get(m.id)?.name ?? m.name : m.name));
+        const membersChanged = members.join('|') !== before.join('|');
+        // Keep the years we already had for anyone still listed; anything typed by hand is never overwritten by a lookup
+        const nextMembers = membersChanged ? linkMembers(ix, members.map((n) => oldMembers.find((m) => norm(m.name) === norm(n) || (m.id && norm(ix.artists.get(m.id)?.name ?? '') === norm(n))) ?? { name: n })) : oldMembers;
+        const baseExt = (artist?.ext ?? {}) as Artist['ext'];
+        const ext = membersChanged ? { ...baseExt, members: nextMembers, members_manual: true } as Artist['ext'] : baseExt;
+        const a: Artist = { ...(artist ?? { id: uid(), links: {}, ext: {}, created_at: now() }), ext, name: f.name.trim(), aliases: f.aliases.split(',').map((s) => s.trim()).filter(Boolean), image_url: f.image_url || null, bio: f.bio || null, is_producer: f.is_producer, updated_at: now() } as Artist;
         await upsert('artists', [a]);
         if (labels !== manualLabels) await setArtistLabels(a.id, labels.split(','));
         onClose(); if (!artist) { nav(`/artist/${a.id}`); void findFeaturesFor(a).then((n) => n && say(`Found ${n} feature${n > 1 ? 's' : ''} for ${a.name}`)).catch(() => undefined); }
@@ -211,6 +249,7 @@ export function ArtistForm({ artist, onClose }: { artist?: Artist; onClose: () =
         <label className="full"><span className="label">Name</span><input className="input" style={{ width: '100%' }} required autoFocus value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} /></label>
         <label className="full"><span className="label">Other names, comma-separated (helps matching)</span><input className="input" style={{ width: '100%' }} value={f.aliases} onChange={(e) => setF({ ...f, aliases: e.target.value })} /></label>
         <label className="full"><span className="label">Labels they're signed to, comma-separated (labels from their releases show up automatically)</span><input className="input" style={{ width: '100%' }} value={labels} onChange={(e) => setLabels(e.target.value)} /></label>
+        <div className="full"><span className="label">Members (for groups) — type a name and press Enter</span><PeopleInput value={members} onChange={setMembers} placeholder="Add a member" /></div>
         <label className="full"><span className="label">Photo URL</span><input className="input" style={{ width: '100%' }} value={f.image_url} onChange={(e) => setF({ ...f, image_url: e.target.value })} /></label>
         <label className="full"><span className="label">Bio</span><textarea className="textarea" value={f.bio} onChange={(e) => setF({ ...f, bio: e.target.value })} /></label>
         <label className="row full"><input type="checkbox" checked={f.is_producer} onChange={(e) => setF({ ...f, is_producer: e.target.checked })} /> Show under producers</label>

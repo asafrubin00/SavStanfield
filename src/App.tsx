@@ -1,3 +1,4 @@
+import { fetchMembers } from './lib/members';
 import ReviewImport from './pages/ReviewImport';
 import TidyArtists from './pages/TidyArtists';
 import { NavButtons, useScrollMemory } from './lib/nav';
@@ -110,6 +111,7 @@ function Shell() {
       releaseArtistName: (r) => releaseArtists(ix, r.id)[0]?.name ?? r.artist_credit ?? '',
       saveArtist: (a) => upsert('artists', [a]), saveRelease: (r) => upsert('releases', [r]), setReleaseLabels,
       existingTracks: (id) => adapter.tracksForReleases([id]), saveTracks: saveTracksQuiet, replaceTracklist, refreshLabels,
+      findMembers: (a) => fetchMembers(ix, a),
     });
   }, [ix, upsert, setReleaseLabels, saveTracksQuiet, replaceTracklist, refreshLabels]);
   const playerOpen = usePlayer().ids.length > 0;

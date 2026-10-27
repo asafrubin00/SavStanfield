@@ -81,6 +81,7 @@ export default function Settings() {
   const recheckRel = data.releases.filter(needsRecheck);
   const recheck = recheckRel.map((r) => r.id);
   const recheckSecs = recheckRel.reduce((s, r) => s + (suspectApple(r) ? 1.5 : 0.05) + (r.ext.deezer_id ? 0.15 : 0) + (r.ext.mbid && /archive\.org/.test(r.artwork_url ?? '') ? 1.1 : 0), 0);
+  const memberTodo = data.artists.filter((a) => !a.ext.members_at && !a.ext.members_manual && a.ext.mb_type !== 'Person' && (a.ext.mbid || !a.is_producer)).map((a) => a.id);
   const needTracks = data.releases.filter((r) => !r.ext.tracks_at && (r.ext.apple_id || r.ext.deezer_id || r.ext.mbid) && !(r.date && r.date > today));
   const trackSecs = needTracks.reduce((s, r) => s + (r.ext.apple_id ? 3.2 : r.ext.deezer_id ? 0.2 : 2.3), 0);
   const scPass = data.releases.filter((r) => !r.ext.sc_at && !r.artwork_url && !r.ext.reviewed && !(r.date && r.date > today)).map((r) => r.id);
@@ -119,6 +120,10 @@ export default function Settings() {
         <div className="progress" style={{ marginTop: 8 }}><div style={{ width: `${(q.done / Math.max(1, q.done + q.pending)) * 100}%` }} /></div>
         {q.last && <div className="small muted" style={{ marginTop: 6 }}>Last: {q.last}</div>}
       </div>}
+
+      <h2 className="h-sec">Group members</h2>
+      <p className="muted" style={{ marginTop: 0 }}>Looks up every artist on MusicBrainz and, for groups, fills in their members (with years where known) — so a group's page lists its members and each member's page says which groups they're in. Groups whose members you've edited by hand are left alone. About one artist a second; keep the tab open.</p>
+      <button className="btn primary" disabled={!memberTodo.length} onClick={() => linkQueue.add('members', memberTodo)}>Find members for {memberTodo.length.toLocaleString()} artists (~{Math.max(1, Math.ceil(memberTodo.length * 1.2 / 60))} min)</button>
 
       <h2 className="h-sec">Reviews from Apple Notes</h2>
       <p className="muted" style={{ marginTop: 0 }}>Paste a note full of “[2026] Artist - Title” reviews and they're matched to your albums and saved as your reviews.</p>
