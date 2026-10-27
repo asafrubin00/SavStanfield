@@ -1,6 +1,6 @@
 import { mergeLinks } from './links';
 import {
-  appleAlbumById, appleAlbumLabel, wikiCover, wikiTracks, appleAlbumTracks, appleFindAlbum, appleIdFromUrl, deezerAlbumInfo, deezerIdFromUrl, mbGroupInfo, mbidFromUrl, deezerAlbumTracks, mbGroupTracks, type SourceTrack, appleSearchArtists, deezerAlbumLabel, mbGroupLabels, soundcloudSearch, ARTIST_OK, artistMatch, bestMatch, caaCover, deezerAlbum, deezerArtist, deezerSearchAlbums,
+  appleAlbumById, appleAlbumLabel, isCleanApple, wikiCover, wikiTracks, appleAlbumTracks, appleFindAlbum, appleIdFromUrl, deezerAlbumInfo, deezerIdFromUrl, mbGroupInfo, mbidFromUrl, deezerAlbumTracks, mbGroupTracks, type SourceTrack, appleSearchArtists, deezerAlbumLabel, mbGroupLabels, soundcloudSearch, ARTIST_OK, artistMatch, bestMatch, caaCover, deezerAlbum, deezerArtist, deezerSearchAlbums,
   fuzzy, fuzzyArtist, geniusSearch, geniusSong, mbLinks, mbSearchArtists, mbSearchGroups, mbSearchGroupsLoose, TITLE_OK,
   titleScore, wikiSearch, wikiSummary, wikidataToWikipedia,
 } from './sources';
@@ -266,7 +266,7 @@ export async function recheckRelease(rel: Release, artistName: string): Promise<
   if (links.apple) {
     const id = (ext.apple_id as number | undefined) ?? appleIdFromUrl(links.apple);
     const cur = id ? await safe(appleAlbumById(id), errors, 'Apple') : null;
-    if (cur && !ok(cur.title, cur.artist)) {
+    if (cur && (!ok(cur.title, cur.artist) || isCleanApple(cur))) {
       changed.push('Apple Music');
       const better = await safe(appleFindAlbum(rel.title, artistName), errors, 'Apple');
       if (better) { links.apple = better.url; ext.apple_id = better.id; if (fromApple(artwork)) artwork = better.artwork ?? null; }
@@ -275,7 +275,7 @@ export async function recheckRelease(rel: Release, artistName: string): Promise<
   }
   if (ext.deezer_id) {
     const cur = await safe(deezerAlbumInfo(ext.deezer_id as number), errors, 'Deezer');
-    if (cur && !ok(cur.title, cur.artist)) { changed.push('Deezer'); delete links.deezer; delete ext.deezer_id; if (fromDeezer(artwork)) artwork = null; }
+    if (cur && (!ok(cur.title, cur.artist) || cur.clean)) { changed.push('Deezer'); delete links.deezer; delete ext.deezer_id; if (fromDeezer(artwork)) artwork = null; }
   }
   if (ext.mbid && fromCAA(artwork)) {
     const cur = await safe(mbGroupInfo(ext.mbid as string), errors, 'MusicBrainz');
@@ -297,8 +297,8 @@ export function suspectApple(r: Release) {
   const m = r.links.apple?.match(/\/album\/([^/]+)\/\d+/);
   return !!m && m[1] !== slugify(r.title);
 }
-/** Bumped when the matching rules change, so the repair job looks again. 2 = whole-name artist check. */
-export const RECHECK_V = 2;
+/** Bumped when the matching rules change, so the repair job looks again. 2 = whole-name artist check; 3 = no clean versions. */
+export const RECHECK_V = 3;
 /** Releases the repair job should look at. */
 export function needsRecheck(r: Release) {
   return !r.ext.links_manual && r.ext.recheck_v !== RECHECK_V && (!!r.links.apple || !!r.ext.deezer_id || (!!r.ext.mbid && fromCAA(r.artwork_url)));

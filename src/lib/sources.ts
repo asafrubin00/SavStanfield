@@ -41,7 +41,7 @@ export const call = async <T,>(src: string, path: string, params?: Record<string
 };
 
 // ——— Matching helpers ———
-const stripSuffix = (t: string) => t.replace(/\s*-\s*(single|ep)$/i, '').replace(/\s*[([](deluxe|explicit|clean|remaster(ed)?|expanded)[^)\]]*[)\]]/gi, '').trim();
+const stripSuffix = (t: string) => t.replace(/\s*-\s*(single|ep)$/i, '').replace(/\s*[([](deluxe|explicit|remaster(ed)?|expanded)[^)\]]*[)\]]/gi, '').trim();
 // Edition tags that don't change which album it is…
 const EDITION = /\b(deluxe|expanded|remaster(ed)?|anniversary|special|bonus|explicit|collector'?s?|platinum|reissue|edition|super|complete|uncut|bonus tracks?)\b/i;
 // …and versions that are a different thing from the album itself
@@ -150,7 +150,14 @@ export const bigArt = (u?: string | null) => u?.replace(/\/\d+x\d+bb\./, '/1200x
 
 // ——— Apple (iTunes Search API: free, no key) ———
 export interface AppleAlbum { id: number; title: string; artist: string; artistId?: number; artwork?: string; date?: string; url: string; tracks?: number; genre?: string; kind: string; explicitness?: string; country?: string }
-interface ItunesRow { wrapperType: string; collectionType?: string; collectionId: number; collectionName: string; artistName: string; artistId?: number; artworkUrl100?: string; releaseDate?: string; collectionViewUrl: string; collectionExplicitness?: string; trackCount?: number; primaryGenreName?: string; trackId?: number; trackName?: string; trackNumber?: number; discNumber?: number; trackTimeMillis?: number; trackViewUrl?: string; artistLinkUrl?: string; kind?: string }
+interface ItunesRow { wrapperType: string; collectionType?: string; collectionId: number; collectionName: string; artistName: string; artistId?: number; artworkUrl100?: string; releaseDate?: string; collectionViewUrl: string; collectionExplicitness?: string; trackCount?: number; primaryGenreName?: string; trackId?: number; trackName?: string; trackNumber?: number; discNumber?: number; trackTimeMillis?: number; trackViewUrl?: string; artistLinkUrl?: string; kind?: string; trackExplicitness?: string }
+/*
+ * Clean (edited) versions are never wanted, anywhere. Apple labels them "cleaned"; Deezer's album record says
+ * edited (code 3); and some carry it in the title, e.g. "(Clean)", "[Edited Version]", "- Clean".
+ */
+export const CLEAN_TITLE = /[([]\s*(clean|edited)(\s+(version|edition))?\s*[)\]]|\s[-–—]\s*(clean|edited)(\s+(version|edition))?\s*$/i;
+export const isCleanApple = (a: { explicitness?: string; title: string }) => a.explicitness === 'cleaned' || CLEAN_TITLE.test(a.title);
+const noClean = (xs: AppleAlbum[]) => xs.filter((x) => !isCleanApple(x));
 const toAlbum = (r: ItunesRow): AppleAlbum => {
   const kind = /- single$/i.test(r.collectionName) ? 'Single' : /- ep$/i.test(r.collectionName) ? 'EP' : 'Album';
   return { id: r.collectionId, title: r.collectionName.replace(/\s*-\s*(single|ep)$/i, ''), explicitness: r.collectionExplicitness, artist: r.artistName, artistId: r.artistId, artwork: bigArt(r.artworkUrl100), date: r.releaseDate?.slice(0, 10), url: r.collectionViewUrl?.split('?')[0], tracks: r.trackCount, genre: r.primaryGenreName, kind };
@@ -159,13 +166,13 @@ const toAlbum = (r: ItunesRow): AppleAlbum => {
 export const searchTerm = (s: string) => s.replace(/[^\p{L}\p{N}\s$&']/gu, ' ').replace(/\s+/g, ' ').trim();
 export async function appleSearchAlbums(term: string, limit = 12, country = 'GB'): Promise<AppleAlbum[]> {
   const r = await call<{ results: ItunesRow[] }>('itunes', 'search', { term: searchTerm(term), entity: 'album', media: 'music', limit, country });
-  return r.results.map((x) => ({ ...toAlbum(x), country }));
+  return noClean(r.results.map((x) => ({ ...toAlbum(x), country })));
 }
 /** Best Apple match for a release: UK store first, then US (some releases are region-locked). */
-/** Best Apple match: exact title (edition tags aside), right artist; explicit over clean, album over single. */
+/** Best Apple match: exact title (edition tags aside), right artist; album over single; never a clean version. */
 export function pickApple(list: AppleAlbum[], title: string, artist: string) {
-  return list.map((x) => ({ x, s: titleScore(x.title, title) })).filter(({ x, s }) => s >= 0.85 && artistMatch(x.artist, artist))
-    .sort((a, b) => b.s - a.s || Number(a.x.explicitness === 'cleaned') - Number(b.x.explicitness === 'cleaned') || Number(a.x.kind !== 'Album') - Number(b.x.kind !== 'Album') || (a.x.date ?? '').localeCompare(b.x.date ?? ''))[0]?.x;
+  return noClean(list).map((x) => ({ x, s: titleScore(x.title, title) })).filter(({ x, s }) => s >= 0.85 && artistMatch(x.artist, artist))
+    .sort((a, b) => b.s - a.s || Number(a.x.kind !== 'Album') - Number(b.x.kind !== 'Album') || (a.x.date ?? '').localeCompare(b.x.date ?? ''))[0]?.x;
 }
 
 /*
@@ -191,7 +198,7 @@ const appleArtistIdsFor = (artist: string) => cached(appleArtistIds, norm(artist
 });
 const appleCatalogue = (id: number, country: string) => cached(appleCatalogues, `${id}:${country}`, async () => {
   const r = await call<{ results: ItunesRow[] }>('itunes', 'lookup', { id, entity: 'album', limit: 200, country });
-  return r.results.filter((x) => x.wrapperType === 'collection').map((x) => ({ ...toAlbum(x), country }));
+  return noClean(r.results.filter((x) => x.wrapperType === 'collection').map((x) => ({ ...toAlbum(x), country })));
 });
 /** Everything Apple lists under this artist in one storefront (up to 200 releases per artist ID). */
 export async function appleAlbumsForArtist(artist: string, country = 'GB'): Promise<AppleAlbum[]> {
@@ -241,7 +248,7 @@ export const deezerIdFromUrl = (u?: string | null) => { const m = u?.match(/deez
 export const mbidFromUrl = (u?: string | null) => u?.match(/musicbrainz\.org\/release-group\/([0-9a-f-]{36})/)?.[1];
 export async function appleSearchSongs(term: string, limit = 12) {
   const r = await call<{ results: ItunesRow[] }>('itunes', 'search', { term, entity: 'song', media: 'music', limit });
-  return r.results.map((s) => ({ id: s.trackId!, title: s.trackName!, artist: s.artistName, album: s.collectionName, albumId: s.collectionId, artwork: bigArt(s.artworkUrl100), date: s.releaseDate?.slice(0, 10), url: songUrl(s.trackViewUrl) }));
+  return r.results.filter((s) => s.trackExplicitness !== 'cleaned' && s.collectionExplicitness !== 'cleaned' && !CLEAN_TITLE.test(s.trackName ?? '') && !CLEAN_TITLE.test(s.collectionName ?? '')).map((s) => ({ id: s.trackId!, title: s.trackName!, artist: s.artistName, album: s.collectionName, albumId: s.collectionId, artwork: bigArt(s.artworkUrl100), date: s.releaseDate?.slice(0, 10), url: songUrl(s.trackViewUrl) }));
 }
 export async function appleSearchArtists(term: string, limit = 8) {
   const r = await call<{ results: ItunesRow[] }>('itunes', 'search', { term, entity: 'musicArtist', media: 'music', limit });
@@ -265,7 +272,7 @@ const q = (s: string) => `"${s.replace(/["\\]/g, ' ')}"`;
 export async function mbSearchGroups(title: string, artist?: string): Promise<MBGroup[]> {
   const query = `releasegroup:${q(title)}${artist ? ` AND artist:${q(artist)}` : ''}`;
   const r = await call<{ 'release-groups': MBGroupRaw[] }>('mb', 'release-group', { query, limit: 10 });
-  return r['release-groups'].map(toGroup);
+  return r['release-groups'].map(toGroup).filter((g) => !CLEAN_TITLE.test(g.title));
 }
 export async function mbSearchArtists(name: string) {
   const r = await call<{ artists: { id: string; name: string; disambiguation?: string; country?: string; type?: string; score: number }[] }>('mb', 'artist', { query: `artist:${q(name)}`, limit: 8 });
@@ -275,7 +282,7 @@ export async function mbArtistGroups(mbid: string): Promise<MBGroup[]> {
   const all: MBGroup[] = [];
   for (let offset = 0; offset < 1000; offset += 100) {
     const r = await call<{ 'release-groups': MBGroupRaw[]; 'release-group-count': number }>('mb', 'release-group', { artist: mbid, limit: 100, offset });
-    all.push(...r['release-groups'].map(toGroup));
+    all.push(...r['release-groups'].map(toGroup).filter((g) => !CLEAN_TITLE.test(g.title)));
     if (all.length >= r['release-group-count'] || !r['release-groups'].length) break;
   }
   return all;
@@ -326,14 +333,29 @@ export async function deezerArtist(name: string) {
   return r.data.find((a) => norm(a.name) === norm(name)) ?? null;
 }
 export async function deezerAlbum(title: string, artist: string) {
-  const r = await call<{ data: { id: number; title: string; cover_xl: string; link: string; artist: { name: string } }[] }>('deezer', 'search/album', { q: `artist:"${artist}" album:"${stripSuffix(title)}"`, limit: 5 });
-  return r.data?.find((a) => titleScore(a.title, title) >= 0.85 && artistMatch(a.artist.name, artist)) ?? null;
+  const r = await call<{ data?: DeezerAlbum[] }>('deezer', 'search/album', { q: `artist:"${artist}" album:"${stripSuffix(title)}"`, limit: 5 });
+  return (await deezerNoClean(r.data ?? [])).find((a) => titleScore(a.title, title) >= 0.85 && artistMatch(a.artist.name, artist)) ?? null;
 }
 
-export interface DeezerAlbum { id: number; title: string; cover_xl: string; cover_medium: string; link: string; artist: { name: string }; record_type?: string }
-export async function deezerAlbumInfo(id: number): Promise<{ title: string; artist: string; cover?: string; link?: string } | null> {
-  const r = await call<{ title?: string; artist?: { name: string }; cover_xl?: string; link?: string; error?: unknown }>('deezer', `album/${id}`);
-  return r.title ? { title: r.title, artist: r.artist?.name ?? '', cover: r.cover_xl, link: r.link } : null;
+export interface DeezerAlbum { id: number; title: string; cover_xl: string; cover_medium: string; link: string; artist: { name: string }; record_type?: string; explicit_lyrics?: boolean }
+/** Deezer's album record: explicit_content_lyrics 3 = edited (the clean version). Cached for the session. */
+const deezerEditedCache = new Map<string, Promise<boolean>>();
+const deezerEdited = (id: number) => cached(deezerEditedCache, String(id), async () =>
+  (await call<{ explicit_content_lyrics?: number }>('deezer', `album/${id}`)).explicit_content_lyrics === 3);
+/**
+ * Drops Deezer clean versions: "(Clean)" in the title; a non-explicit copy of an album that's also listed explicit;
+ * and anything else non-explicit whose album record says edited.
+ */
+async function deezerNoClean<T extends DeezerAlbum>(xs: T[]): Promise<T[]> {
+  const key = (d: DeezerAlbum) => `${norm(cleanTitle(d.title))}|${norm(d.artist?.name ?? '')}`;
+  const explicit = new Set(xs.filter((d) => d.explicit_lyrics).map(key));
+  const kept = xs.filter((d) => !CLEAN_TITLE.test(d.title) && !(d.explicit_lyrics === false && explicit.has(key(d))));
+  const edited = await Promise.all(kept.map((d) => (d.explicit_lyrics === false ? deezerEdited(d.id).catch(() => false) : false)));
+  return kept.filter((_, i) => !edited[i]);
+}
+export async function deezerAlbumInfo(id: number): Promise<{ title: string; artist: string; cover?: string; link?: string; clean: boolean } | null> {
+  const r = await call<{ title?: string; artist?: { name: string }; cover_xl?: string; link?: string; explicit_content_lyrics?: number; error?: unknown }>('deezer', `album/${id}`);
+  return r.title ? { title: r.title, artist: r.artist?.name ?? '', cover: r.cover_xl, link: r.link, clean: r.explicit_content_lyrics === 3 || CLEAN_TITLE.test(r.title) } : null;
 }
 export async function mbGroupInfo(mbid: string): Promise<{ title: string; artist: string } | null> {
   const r = await call<MBGroupRaw>('mb', `release-group/${mbid}`, { inc: 'artist-credits' });
@@ -342,14 +364,14 @@ export async function mbGroupInfo(mbid: string): Promise<{ title: string; artist
 /** Plain (unquoted) Deezer album search — for fuzzy matching. */
 export async function deezerSearchAlbums(q: string, limit = 10): Promise<DeezerAlbum[]> {
   const r = await call<{ data?: DeezerAlbum[] }>('deezer', 'search/album', { q: searchTerm(q), limit });
-  return r.data ?? [];
+  return deezerNoClean(r.data ?? []);
 }
 
 /** Loose MusicBrainz release-group search (no exact-phrase quoting). */
 export async function mbSearchGroupsLoose(title: string, artist: string): Promise<MBGroup[]> {
   const words = (s: string) => searchTerm(s).replace(/[+\-!(){}[\]^"~*?:\\/]/g, ' ').trim();
   const r = await call<{ 'release-groups': MBGroupRaw[] }>('mb', 'release-group', { query: `releasegroup:(${words(title)}) AND artist:(${words(artist)})`, limit: 10 });
-  return r['release-groups'].map(toGroup);
+  return r['release-groups'].map(toGroup).filter((g) => !CLEAN_TITLE.test(g.title));
 }
 
 /** Front cover from the Cover Art Archive for a MusicBrainz release group, if one exists. */

@@ -555,7 +555,7 @@ function MatchWizard({ release, artistName, onClose }: { release: Release; artis
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 18 }}>
         <Col title="Apple Music — link and artwork">{!apple ? loading : apple.map((a) => (
           <div key={a.id} className={`cand${pick.apple?.id === a.id ? ' on' : ''}`} onClick={() => setPick({ ...pick, apple: pick.apple?.id === a.id ? undefined : a })}>
-            <Cover src={a.artwork} title={a.title} size={52} /><span><div style={{ fontWeight: 600 }}>{a.title}</div><div className="small muted">{a.artist} · {a.kind} · {a.date?.slice(0, 4)} · {a.tracks} tracks{a.country === 'US' ? ' · US store' : ''}{a.explicitness === 'cleaned' ? ' · clean' : ''}</div></span><span />
+            <Cover src={a.artwork} title={a.title} size={52} /><span><div style={{ fontWeight: 600 }}>{a.title}</div><div className="small muted">{a.artist} · {a.kind} · {a.date?.slice(0, 4)} · {a.tracks} tracks{a.country === 'US' ? ' · US store' : ''}</div></span><span />
           </div>))}{apple && !apple.length && <div className="small muted">No results</div>}</Col>
         <Col title="MusicBrainz — IDs, Wikipedia, Discogs">{!mb ? loading : mb.map((g) => (
           <div key={g.id} className={`cand${pick.mb?.id === g.id ? ' on' : ''}`} style={{ gridTemplateColumns: '1fr auto' }} onClick={() => setPick({ ...pick, mb: pick.mb?.id === g.id ? undefined : g })}>
