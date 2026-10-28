@@ -282,3 +282,24 @@ details summary { cursor: pointer; }
 .kicker .fav { font-size: 22px; }
 .hero-people { margin-top: 10px; font-size: 17px; line-height: 1.5; }
 .hero-people .btn { padding: 0 5px; margin-left: 2px; }
+
+.split-pick { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; margin-top: -6px; }
+.credit-sec { margin-top: 18px; }
+.credit-head { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sec-toggle { display: inline-flex; align-items: baseline; gap: 8px; background: none; border: 0; padding: 4px 0; color: inherit; cursor: pointer; font: inherit; }
+.sec-toggle .h-sec { margin: 0; }
+.sec-toggle .caret { width: 12px; color: var(--muted); font-size: 14px; }
+.sec-toggle:hover .h-sec { text-decoration: underline; text-underline-offset: 4px; }
+.credit-head .input.sm { padding: 4px 9px; font-size: 14px; width: 220px; }
+.credit-table { table-layout: fixed; min-width: 960px; margin-top: 6px; font-size: 14px; }
+.credit-table td { padding: 4px 8px; }
+.credit-table th { padding: 6px 8px; }
+.credit-table .thumb { width: 44px; }
+.credit-table .fav { font-size: 17px; }
+.clip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.title-cell { display: flex; align-items: center; gap: 2px; min-width: 0; }
+.title-cell .clip { flex: 0 1 auto; }
+.row-x { padding: 0 5px; visibility: hidden; flex: none; }
+.credit-table tr:hover .row-x, .row-x:focus { visibility: visible; }
+@media (hover: none) { .row-x { visibility: visible; } }
+.clip-pop { position: fixed; z-index: 80; background: var(--surface); color: var(--ink); border: 1px solid var(--line); border-radius: var(--radius-s); padding: 8px 10px; font-size: 14px; line-height: 1.45; box-shadow: 0 6px 24px rgba(0,0,0,.25); white-space: normal; }

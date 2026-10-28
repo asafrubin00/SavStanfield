@@ -40,7 +40,19 @@ export function parseArtistCredit(credit: string, isCollab: boolean): { names: s
   if (as.length === 2) return { group: as[1].trim(), names: splitNames(as[0]) };
   return { names: isCollab ? splitNames(credit) : [credit.trim()] };
 }
-const splitNames = (s: string) => s.split(/\s*(?:&|,|\bx\b)\s*/i).map((x) => x.trim()).filter(Boolean);
+export const splitNames = (s: string) => s.split(/\s*(?:&|,|\bx\b)\s*/i).map((x) => x.trim()).filter(Boolean);
+/**
+ * Whether "A & B" should be credited as two artists when you haven't said: yes for collaborations, and yes when
+ * at least one of the names is already an artist of yours (and "A & B" itself isn't). "Cool & Dre" stays one.
+ * A release's own choice (ext.credit_split, the tick box on Edit) always wins.
+ */
+export function autoSplit(credit: string, type: string, known: (name: string) => boolean): boolean {
+  if (/\s+as\s+/i.test(credit)) return true;
+  const parts = splitNames(credit);
+  if (parts.length < 2) return false;
+  if (/collab/i.test(type)) return true;
+  return !known(credit) && parts.some(known);
+}
 
 export function importWorkbook(buf: ArrayBuffer, existing: DataSet): ImportResult {
   const wb = XLSX.read(buf, { cellDates: true });
@@ -83,7 +95,8 @@ export function importWorkbook(buf: ArrayBuffer, existing: DataSet): ImportResul
     out.credits.push({ id: uid(), artist_id: artistId, release_id: target.release_id ?? null, track_id: target.track_id ?? null, role, position });
   }
   function creditRelease(rel: Release, creditStr: string) {
-    const { names, group } = parseArtistCredit(creditStr, /collab/i.test(rel.type));
+    const split = (rel.ext.credit_split as boolean | undefined) ?? autoSplit(creditStr, rel.type, (n) => artistsByName.has(norm(n)));
+    const { names, group } = parseArtistCredit(creditStr, split);
     let pos = 0;
     if (group) credit(artist(group).id, { release_id: rel.id }, 'primary', pos++);
     for (const n of names) credit(artist(n).id, { release_id: rel.id }, 'primary', pos++);

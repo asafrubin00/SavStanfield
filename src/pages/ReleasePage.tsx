@@ -4,7 +4,7 @@ import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, fmtMs, LinkBar, Li
 import { autoLinkRelease, findReleaseLabels, followLinks, tracklistSources } from '../lib/enrich';
 import AddToPlaylist from '../components/AddToPlaylist';
 import { player, usePlayer } from '../lib/player';
-import { parseArtistCredit } from '../lib/importSheet';
+import { autoSplit, parseArtistCredit, splitNames } from '../lib/importSheet';
 import { fantanoSearch, mergeLinks } from '../lib/links';
 import {
   appleCatalogueMatches, appleEmbed, appleFindAlbum, appleSearchAlbums, artistMatch, geniusSearch, geniusSong, mbLinks, mbSearchGroups,
@@ -286,17 +286,31 @@ export function ReleaseForm({ release, onClose, defaults }: { release?: Release;
   const [labels, setLabels] = useState(curLabels);
   const [prod, setProd] = useState(execs);
   const up = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  // "A & B": two artists or one? Starts from how it's credited now (or the automatic rule); the tick box decides.
+  const known = (n: string) => st.ix.artistByName.has(norm(n));
+  const curSplit = release ? (st.ix.creditsByRelease.get(release.id) ?? []).filter((c) => c.role === 'primary').length > 1 : undefined;
+  const [splitPick, setSplitPick] = useState<boolean | undefined>(release?.ext.credit_split as boolean | undefined);
+  const credit = f.artist_credit.trim();
+  const hasAs = /\s+as\s+/i.test(credit);
+  const parts = hasAs ? [] : splitNames(credit);
+  const autoSplitNow = release && credit === (release.artist_credit ?? '') && curSplit !== undefined ? curSplit : autoSplit(credit, f.type, known);
+  const split = parts.length > 1 ? splitPick ?? autoSplitNow : hasAs;
   async function submit() {
     if (!f.title.trim() || !f.artist_credit.trim()) return;
     const date = f.date || null; const year = f.year ? Number(f.year) : date ? Number(date.slice(0, 4)) : null;
-    const r: Release = { ...(release ?? { id: uid(), source: 'manual', links: {}, ext: {}, created_at: now(), ...defaults }), title: f.title.trim(), type: f.type, artist_credit: f.artist_credit.trim(), date, year, label: f.label || null, artwork_url: f.artwork_url || null, updated_at: now() } as Release;
+    const base = release ?? { id: uid(), source: 'manual', links: {}, ext: {}, created_at: now(), ...defaults };
+    const ext = { ...base.ext }; if (parts.length > 1 && splitPick !== undefined) ext.credit_split = splitPick; else if (parts.length < 2) delete ext.credit_split;
+    const r: Release = { ...base, ext, title: f.title.trim(), type: f.type, artist_credit: f.artist_credit.trim(), date, year, label: f.label || null, artwork_url: f.artwork_url || null, updated_at: now() } as Release;
     await st.upsert('releases', [r]);
     // Re-point primary artist credits if the artist text changed (or for a new release)
-    if (!release || release.artist_credit !== r.artist_credit) {
-      const old = (st.ix.creditsByRelease.get(r.id) ?? []).filter((c) => c.role === 'primary').map((c) => c.id);
+    if (!release || release.artist_credit !== r.artist_credit || (parts.length > 1 && split !== curSplit)) {
+      const oldC = (st.ix.creditsByRelease.get(r.id) ?? []).filter((c) => c.role === 'primary');
+      const old = oldC.map((c) => c.id);
       await st.remove('credits', old);
-      const { names, group } = parseArtistCredit(r.artist_credit!, /collab/i.test(r.type));
-      [...(group ? [group] : []), ...names].forEach((n, i) => st.creditArtist(st.ensureArtist(n).artist.id, { release_id: r.id }, 'primary', i));
+      const { names, group } = parseArtistCredit(r.artist_credit!, split);
+      const now_ = [...(group ? [group] : []), ...names].map((n, i) => { const id = st.ensureArtist(n).artist.id; st.creditArtist(id, { release_id: r.id }, 'primary', i); return id; });
+      // An artist left with nothing at all (e.g. the old "A & B" after ticking Separate artists) is tidied away
+      void st.pruneArtists(oldC.map((c) => c.artist_id).filter((id) => !now_.includes(id)), new Set(old));
     }
     if (labels !== curLabels) await st.setReleaseLabels(r.id, labels.split(','));
     if (prod !== execs) {
@@ -310,7 +324,11 @@ export function ReleaseForm({ release, onClose, defaults }: { release?: Release;
     <Modal title={release ? 'Edit release' : 'Add a release'} onClose={onClose}>
       <form className="form-grid" onSubmit={(e) => { e.preventDefault(); void submit(); }}>
         <label className="full"><span className="label">Title</span><input className="input" style={{ width: '100%' }} required autoFocus value={f.title} onChange={up('title')} /></label>
-        <label className="full"><span className="label">Artist — use “A & B” for collaborations, “A & B as Group” for duos with a name</span><input className="input" style={{ width: '100%' }} required value={f.artist_credit} onChange={up('artist_credit')} /></label>
+        <label className="full"><span className="label">Artist — “A & B as Group” for a duo with its own name</span><input className="input" style={{ width: '100%' }} required value={f.artist_credit} onChange={up('artist_credit')} /></label>
+        {parts.length > 1 && <div className="full split-pick">
+          <label className="row"><input type="checkbox" checked={split} onChange={(e) => setSplitPick(e.target.checked)} /> Separate artists</label>
+          <span className="small muted">{split ? <>Credited to {parts.map((n, i) => <span key={n}>{i ? ' + ' : ''}<strong>{n}</strong>{known(n) ? '' : ' (new)'}</span>)}</> : <>Credited to one artist, <strong>{credit}</strong>{known(credit) ? '' : ' (new)'}</>}</span>
+        </div>}
         <label><span className="label">Type</span><select className="select" style={{ width: '100%' }} value={f.type} onChange={up('type')}>{[...new Set([...RELEASE_TYPES, f.type])].map((t) => <option key={t}>{t}</option>)}</select></label>
         <label><span className="label">Release date</span><input className="input" style={{ width: '100%' }} type="date" value={f.date} onChange={up('date')} /></label>
         <label><span className="label">Year (if no exact date)</span><input className="input num" style={{ width: '100%' }} inputMode="numeric" value={f.year} onChange={up('year')} /></label>

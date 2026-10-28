@@ -2,11 +2,12 @@ import { fetchMembers, groupMembers, groupsOf, linkMembers, years } from '../lib
 import PeopleInput from '../components/PeopleInput';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import { AddToList, OldNotes, PageKicker, Cover, Credits, fmtDate, LinkBar, LinksEditor, Modal, QuickRate, ReleaseTile } from '../components/ui';
+import { AddToList, OldNotes, PageKicker, Cover, fmtDate, LinkBar, LinksEditor, Modal, ReleaseTile } from '../components/ui';
 import { autoLinkArtist } from '../lib/enrich';
 import { parseArtistCredit } from '../lib/importSheet';
 import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists, type AppleAlbum, type MBGroup } from '../lib/sources';
-import { artistLabels, norm, shownInArtists, trackArtists, useStore } from '../lib/store';
+import { artistLabels, norm, releaseArtists, shownInArtists, trackArtists, useStore } from '../lib/store';
+import { CreditSection, releaseRow, trackRow } from '../components/CreditTable';
 import { SortSelect, usePref, flip } from '../components/controls';
 import { type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
@@ -30,7 +31,6 @@ export default function ArtistPage() {
   const [editing, setEditing] = useState(false);
   const [disco, setDisco] = useState(false);
   const [featBusy, setFeatBusy] = useState(false);
-  const [moreOpen, setMoreOpen] = usePref('artist.moreOpen', false);
   const cur = ix.artists.get(id!);
   const members = cur ? linkMembers(ix, groupMembers(cur)) : [];
   const memberOf = cur ? groupsOf(ix, cur.id) : [];
@@ -165,36 +165,21 @@ export default function ArtistPage() {
               <div className="grid tight">{byType.get(t)!.map((r) => <ReleaseTile key={r.id} r={r} showArtist={r.artist_credit !== a.name} />)}</div>
             </section>
           ))}
-          {produced.length > 0 && <section>
-            <h2 className="h-sec">Production <span className="muted">{produced.length}</span></h2>
-            <div className="table-wrap"><table className="table"><tbody>{produced.map(({ r, tracks, exec }) => (
-              <tr key={r.id}><td className="thumb"><Cover src={r.artwork_url} title={r.title} size={36} /></td>
-                <td><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link><div className="small muted">{r.artist_credit} · {r.year}</div></td>
-                <td className="small">{exec && <div>Executive producer</div>}{tracks.map((t, i) => <span key={t.id}>{i ? ', ' : ''}<Link to={`/track/${t.id}`}>{t.title}</Link></span>)}</td></tr>))}</tbody></table></div>
-          </section>}
           {(() => {
             const singles = hiddenRel(HIDDEN[0][1]); const leaks = hiddenRel(HIDDEN[1][1]); const guest = hiddenRel(HIDDEN[2][1]);
-            const n = singles.length + leaks.length + guest.length + appearances.length;
-            if (!n) return null;
-            const relRows = (rs: Release[]) => rs.map((r) => (
-              <tr key={r.id}><td className="thumb"><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></td>
-                <td><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link><div className="small muted">{r.artist_credit !== a.name && <><Credits release={r} /> · </>}{r.date ? fmtDate(r.date) : r.year}</div></td>
-                <td style={{ textAlign: 'right' }}><QuickRate type="release" id={r.id} /></td></tr>));
-            const what = [singles.length && 'singles', leaks.length && 'leaks', (guest.length || appearances.length) && 'appearances'].filter(Boolean) as string[];
-            return <section>
-              <button className="btn" style={{ marginTop: 28 }} aria-expanded={moreOpen} onClick={() => setMoreOpen(!moreOpen)}>{moreOpen ? 'Hide' : 'Show'} {what.join(', ').replace(/, ([^,]*)$/, ' and $1')} ({n})</button>
-              {moreOpen && <>
-                {singles.length > 0 && <><h2 className="h-sec">Singles <span className="muted">{singles.length}</span></h2><div className="table-wrap"><table className="table"><tbody>{relRows(singles)}</tbody></table></div></>}
-                {leaks.length > 0 && <><h2 className="h-sec">Leaks <span className="muted">{leaks.length}</span></h2><div className="table-wrap"><table className="table"><tbody>{relRows(leaks)}</tbody></table></div></>}
-                {(guest.length > 0 || appearances.length > 0) && <>
-                  <h2 className="h-sec">Appearances <span className="muted">{guest.length + appearances.length}</span></h2>
-                  <div className="table-wrap"><table className="table"><tbody>{relRows(guest)}{appearances.map(({ r, tracks }) => (
-                    <tr key={r?.id ?? tracks[0].id}><td className="thumb"><Cover src={r?.artwork_url} title={r?.title ?? tracks[0].title} size={36} /></td>
-                      <td>{tracks.map((t, i) => <span key={t.id}>{i ? ', ' : ''}<Link to={`/track/${t.id}`} style={{ fontWeight: 600 }}>{t.title}</Link><button className="btn sm ghost" style={{ padding: '0 4px' }} title={`Not ${a.name} — remove this appearance`} aria-label={`Remove ${a.name} from ${t.title}`} onClick={() => void st.setTrackCredits(t.id, 'featured', trackArtists(ix, t.id, 'featured').filter((x) => x.id !== a.id).map((x) => x.name))}>×</button></span>)}
-                        {r && <div className="small muted">on <Link to={`/release/${r.id}`}>{r.title}</Link> · <Credits release={r} /> · {r.year}</div>}</td><td /></tr>))}</tbody></table></div>
-                </>}
-              </>}
-            </section>;
+            const load = (rs: Release[]) => () => void st.loadReleaseTracks(rs.map((r) => r.id));
+            const prodRows = produced.flatMap(({ r, tracks, exec }) => [
+              ...(exec ? [releaseRow(ix, r, { key: `x${r.id}`, title: r.title, producers: releaseArtists(ix, r.id, 'exec_producer').map((p) => ({ name: p.name, id: p.id })), producerNote: 'exec.' })] : []),
+              ...tracks.map((t) => trackRow(ix, t, r)),
+            ]);
+            const apRows = [...guest.map((r) => releaseRow(ix, r)), ...appearances.flatMap(({ r, tracks }) => tracks.map((t) => trackRow(ix, t, r,
+              trackArtists(ix, t.id, 'featured').some((x) => x.id === a.id) ? { onRemove: { label: `Not ${a.name} — remove this appearance`, run: () => void st.setTrackCredits(t.id, 'featured', trackArtists(ix, t.id, 'featured').filter((x) => x.id !== a.id).map((x) => x.name)) } } : {})))];
+            return <div style={{ marginTop: 22 }}>
+              <CreditSection id="production" title="Production" rows={prodRows} />
+              <CreditSection id="singles" title="Singles" rows={singles.map((r) => releaseRow(ix, r))} onOpen={load(singles)} />
+              <CreditSection id="leaks" title="Leaks" rows={leaks.map((r) => releaseRow(ix, r))} onOpen={load(leaks)} />
+              <CreditSection id="appearances" title="Appearances" rows={apRows} onOpen={load(guest)} />
+            </div>;
           })()}
           {concerts.length > 0 && <section>
             <h2 className="h-sec">Seen live</h2>

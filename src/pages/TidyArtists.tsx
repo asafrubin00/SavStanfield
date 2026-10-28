@@ -32,15 +32,15 @@ export function findDuplicates(ix: Index, artists: Artist[]): Pair[] {
   return out.sort((p, q) => Number(q.exact) - Number(p.exact) || q.score - p.score);
 }
 
-/** Artists whose name is two or more artists you already have, e.g. "Action Bronson & Joey Bada$$". */
-export function findCombos(ix: Index, artists: Artist[]): { combo: Artist; parts: Artist[] }[] {
-  const out: { combo: Artist; parts: Artist[] }[] = [];
+/** Artists whose name is two or more artists stuck together, e.g. "Action Bronson & Joey Bada$$" — at least one of them already yours. */
+export function findCombos(ix: Index, artists: Artist[]): { combo: Artist; parts: (Artist | string)[] }[] {
+  const out: { combo: Artist; parts: (Artist | string)[] }[] = [];
   for (const a of artists) {
-    if (a.ext.is_group) continue;
+    if (a.ext.is_group || a.ext.mb_type === 'Group' || (a.ext.members as unknown[] | undefined)?.length) continue;
     const names = a.name.split(SPLIT).map((s) => s.trim()).filter(Boolean);
     if (names.length < 2) continue;
-    const parts = names.map((n) => ix.artistByName.get(norm(n))).filter((p): p is Artist => !!p && p.id !== a.id);
-    if (parts.length === names.length) out.push({ combo: a, parts });
+    const parts = names.map((n) => { const p = ix.artistByName.get(norm(n)); return p && p.id !== a.id ? p : n; });
+    if (parts.some((p) => typeof p !== 'string')) out.push({ combo: a, parts });
   }
   return out.sort((x, y) => x.combo.name.localeCompare(y.combo.name));
 }
@@ -86,14 +86,14 @@ export default function TidyArtists() {
       )}
 
       <h2 className="h-sec">Two artists stuck together <span className="muted">{combos.length}</span></h2>
-      <p className="small muted" style={{ marginTop: -6 }}>Split credits everything to each artist separately — a joint album shows on both pages, a feature in both their appearances — then removes the joint entry.</p>
+      <p className="small muted" style={{ marginTop: -6 }}>Split credits everything to each artist separately — a joint album shows on both pages, a feature in both their appearances — then removes the joint entry. Names marked (new) are added as artists.</p>
       {!combos.length ? <div className="empty">Nothing to split.</div> : (
         <div className="table-wrap"><table className="table"><tbody>{combos.map(({ combo, parts }) => (
           <tr key={combo.id}>
             <td style={{ width: '30%' }}><Who a={combo} /></td>
-            <td className="small">→ {parts.map((p, i) => <span key={p.id}>{i ? ' + ' : ''}<Link to={`/artist/${p.id}`}>{p.name}</Link></span>)}</td>
+            <td className="small">→ {parts.map((p, i) => <span key={typeof p === 'string' ? p : p.id}>{i ? ' + ' : ''}{typeof p === 'string' ? <>{p} <span className="muted">(new)</span></> : <Link to={`/artist/${p.id}`}>{p.name}</Link>}</span>)}</td>
             <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
-              <button className="btn sm primary" disabled={!!busy} onClick={() => run(`Split ${combo.name}`, () => st.splitArtist(combo, parts))}>Split</button>{' '}
+              <button className="btn sm primary" disabled={!!busy} onClick={() => run(`Split ${combo.name}`, () => st.splitArtist(combo, parts.map((p) => (typeof p === 'string' ? st.ensureArtist(p).artist : p))))}>Split</button>{' '}
               <button className="btn sm ghost" disabled={!!busy} onClick={() => run(`Kept ${combo.name} as a group`, () => st.upsert('artists', [{ ...combo, ext: { ...combo.ext, is_group: true }, updated_at: now() }]))}>It's a group, keep it</button>
             </td>
           </tr>))}</tbody></table></div>
