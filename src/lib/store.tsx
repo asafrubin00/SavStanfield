@@ -86,7 +86,7 @@ interface Store {
   /** Re-read labels from the release's current sources and replace the ones found automatically. */
   refreshLabels(release: Release): Promise<string[]>;
   /** Set a song's producers or featured artists to exactly these names (in order). Artists left with nothing are removed. */
-  setTrackCredits(trackId: string, role: 'producer' | 'featured', names: string[], opts?: { prune?: boolean }): Promise<string[]>;
+  setTrackCredits(trackId: string, role: 'producer' | 'featured' | 'primary', names: string[], opts?: { prune?: boolean }): Promise<string[]>;
   /** Delete these artists if nothing (credits, ratings, notes, lists, labels) refers to them any more. */
   pruneArtists(ids: string[], removedCredits?: Set<string>): Promise<number>;
   /** Move everything credited to `from` onto `into`; `from`'s name becomes one of `into`'s other names. */
@@ -404,7 +404,7 @@ export function StoreProvider({ children }: { children: ReactNode }) {
     return n;
   }, [deleteArtist]);
 
-  const setTrackCredits = useCallback(async (trackId: string, role: 'producer' | 'featured', names: string[], opts: { prune?: boolean } = {}) => {
+  const setTrackCredits = useCallback(async (trackId: string, role: 'producer' | 'featured' | 'primary', names: string[], opts: { prune?: boolean } = {}) => {
     const cur = (ixRef.current.creditsByTrack.get(trackId) ?? []).filter((c) => c.role === role);
     const want = [...new Map(names.map((n) => n.trim()).filter(Boolean).map((n) => [norm(n), n])).values()];
     const ids = want.map((n) => ensureArtist(n, role === 'producer' ? { is_producer: true } : {}).artist.id);

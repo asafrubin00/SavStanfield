@@ -169,7 +169,7 @@ export default function ArtistPage() {
             const singles = hiddenRel(HIDDEN[0][1]); const leaks = hiddenRel(HIDDEN[1][1]); const guest = hiddenRel(HIDDEN[2][1]);
             const load = (rs: Release[]) => () => void st.loadReleaseTracks(rs.map((r) => r.id));
             const prodRows = produced.flatMap(({ r, tracks, exec }) => [
-              ...(exec ? [releaseRow(ix, r, { key: `x${r.id}`, title: r.title, producers: releaseArtists(ix, r.id, 'exec_producer').map((p) => ({ name: p.name, id: p.id })), producerNote: 'exec.' })] : []),
+              ...(exec ? [releaseRow(ix, r, { key: `x${r.id}`, title: r.title, producers: releaseArtists(ix, r.id, 'exec_producer').map((p) => ({ name: p.name, id: p.id })), producerNote: 'exec.', src: { kind: 'release', r, exec: true } })] : []),
               ...tracks.map((t) => trackRow(ix, t, r)),
             ]);
             const apRows = [...guest.map((r) => releaseRow(ix, r)), ...appearances.flatMap(({ r, tracks }) => tracks.map((t) => trackRow(ix, t, r,

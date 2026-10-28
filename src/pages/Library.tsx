@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { MultiSelect, RatingSelect, ratingMatches, SortSelect } from '../components/controls';
-import { Cover, Credits, QuickRate, ReleaseTile } from '../components/ui';
+import { Cover, Credits, fmtDate, QuickRate, ReleaseTile } from '../components/ui';
+import EditCell from '../components/EditCell';
+import { ImagePicker } from '../components/ListBits';
+import { useEdits } from '../lib/edits';
 import { norm, useStore } from '../lib/store';
 import { RELEASE_TYPES } from '../lib/types';
 import { ReleaseForm } from './ReleasePage';
@@ -14,6 +17,8 @@ export default function Library() {
   const [sp, setSp] = useSearchParams();
   const [shown, setShown] = usePageState('shown', PAGE);
   const [adding, setAdding] = useState(false);
+  const [coverFor, setCoverFor] = useState<import('../lib/types').Release | null>(null);
+  const E = useEdits(); const { say } = useStore();
   const get = (k: string) => sp.get(k) ?? '';
   const set = (k: string, v: string | null) => { const n = new URLSearchParams(sp); if (v) n.set(k, v); else n.delete(k); setSp(n, { replace: true }); setShown(PAGE); };
   const types = get('type') ? get('type').split(',') : [];
@@ -131,10 +136,11 @@ export default function Library() {
             <div className="table-wrap"><table className="table">
               <thead><tr><th className="thumb" /><th style={{ cursor: 'pointer' }} onClick={() => sortBy('title')}>Title{arrow('title', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('artist')}>Artist{arrow('artist', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('type')}>Type{arrow('type', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('date-desc')}>Date{arrow('date-desc', false)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('rating')}>Rating{arrow('rating', false)}</th></tr></thead>
               <tbody>{rows.slice(0, shown).map((r) => (
-                <tr key={r.id}><td><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></td>
-                  <td><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link></td>
-                  <td><Credits release={r} /></td><td className="muted">{r.type}</td>
-                  <td className="num muted" style={{ whiteSpace: 'nowrap' }}>{r.date ?? r.year ?? ''}</td>
+                <tr key={r.id}><td><EditCell kind="action" label="Cover" onEdit={() => setCoverFor(r)}><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></EditCell></td>
+                  <td><EditCell kind="text" label="Title" value={r.title} onSave={(v) => E.renameRelease(r, v)}><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link></EditCell></td>
+                  <td><EditCell kind="text" label="Artist" value={r.artist_credit ?? ''} onSave={(v) => E.setReleaseArtist(r, v)}><Credits release={r} /></EditCell></td>
+                  <td className="muted"><EditCell kind="select" label="Type" value={r.type} options={[...RELEASE_TYPES]} onSave={(v) => E.setReleaseType(r, v)}>{r.type}</EditCell></td>
+                  <td className="num muted" style={{ whiteSpace: 'nowrap' }}><EditCell kind="text" label="Release date" placeholder="27 Nov 2017, 2017-11-27 or 2017" value={r.date ?? (r.year ? String(r.year) : '')} onSave={(v) => E.setReleaseWhen(r, v)}>{r.date ? fmtDate(r.date) : r.year ?? '\u00a0'}</EditCell></td>
                   <td><QuickRate type="release" id={r.id} /></td></tr>))}</tbody>
             </table></div>
           )}
@@ -142,6 +148,8 @@ export default function Library() {
         </section>
       </div>
       {adding && <ReleaseForm onClose={() => setAdding(false)} />}
+      {coverFor && <ImagePicker title={`Cover for ${coverFor.title}`} onClose={() => setCoverFor(null)} resetLabel={coverFor.artwork_url ? 'Remove cover' : undefined}
+        onSet={async (u) => { await E.setReleaseCover(coverFor, u); say(u ? 'Cover updated' : 'Cover removed'); }} />}
     </div>
   );
 }

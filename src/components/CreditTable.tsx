@@ -1,6 +1,9 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { Link } from 'react-router-dom';
+import { Link, useNavigate } from 'react-router-dom';
+import EditCell from './EditCell';
+import { ImagePicker } from './ListBits';
+import { useEdits } from '../lib/edits';
 import { Cover, Credits, Fav, fmtDate } from './ui';
 import { usePref } from './controls';
 import { songFeatures } from '../lib/features';
@@ -22,6 +25,8 @@ export interface CreditRow {
   date: string; // ISO date or year, for showing and sorting
   fav: { type: EntityType; id: string };
   onRemove?: { label: string; run: () => void };
+  /** What the row is, so its cells can be edited. exec: the producers cell is the release's executive producers. */
+  src: { kind: 'track'; t: Track; r?: Release } | { kind: 'release'; r: Release; exec?: boolean };
 }
 
 const FEAT = /\s*[([]\s*(?:feat\.?|ft\.?|featuring|with)\s+[^)\]]*[)\]]|\s+(?:feat\.?|ft\.?|featuring)\s+.+$/gi;
@@ -45,7 +50,7 @@ export function trackRow(ix: Index, t: Track, r: Release | undefined, extra: Par
     release: t.artist_credit || primary.length ? undefined : r,
     artists: primary.length ? names(primary) : undefined, artistText: primary.length ? undefined : t.artist_credit ?? undefined,
     features: trackFeatures(ix, t), producers: names(trackArtists(ix, t.id, 'producer')),
-    album: r ? { title: r.title, id: r.id } : undefined, date: whenOf(r), fav: { type: 'track', id: t.id }, ...extra,
+    album: r ? { title: r.title, id: r.id } : undefined, date: whenOf(r), fav: { type: 'track', id: t.id }, src: { kind: 'track', t, r }, ...extra,
   };
 }
 /** Row for a whole release (a single, a leak, a guest appearance): features and producers come from its songs. */
@@ -58,7 +63,7 @@ export function releaseRow(ix: Index, r: Release, extra: Partial<CreditRow> = {}
   return {
     key: r.id, cover: r.artwork_url, title: bareTitle(r.title.replace(/\s*-\s*(single|ep)$/i, '')), fullTitle: r.title, titleTo: `/release/${r.id}`,
     release: r, features, producers: producers.length ? producers : exec, producerNote: producers.length || !exec.length ? undefined : 'exec.',
-    album: { title: r.title, id: r.id }, date: whenOf(r), fav: { type: 'release', id: r.id }, ...extra,
+    album: { title: r.title, id: r.id }, date: whenOf(r), fav: { type: 'release', id: r.id }, src: { kind: 'release', r }, ...extra,
   };
 }
 
@@ -92,7 +97,8 @@ const COLS: [Col, string][] = [['title', 'Song'], ['artist', 'Artist'], ['featur
  * click a column to sort, type to filter.
  */
 export function CreditSection({ id, title, rows, onOpen }: { id: string; title: string; rows: CreditRow[]; onOpen?: () => void }) {
-  const st = useStore();
+  const st = useStore(); const E = useEdits(); const nav = useNavigate();
+  const [coverFor, setCoverFor] = useState<Release | null>(null);
   const [open, setOpen] = usePref(`artist.sec.${id}`, false);
   const [sort, setSort] = usePref<{ col: Col; asc: boolean }>(`artist.sec.${id}.sort`, { col: 'date', asc: false });
   const [q, setQ] = useState('');
@@ -133,20 +139,35 @@ export function CreditSection({ id, title, rows, onOpen }: { id: string; title: 
             {label}{sort.col === c ? (sort.asc ? ' ↑' : ' ↓') : ''}</th>))}</tr></thead>
         <tbody>{shown.map((r) => {
           const fav = st.annotation(r.fav.type, r.fav.id)?.favorite;
+          const src = r.src; const rel = src.r; const nm = (ns: Name[]) => ns.map((x) => x.name);
+          // A release's features/producers live on its song: the only one (made if there's no tracklist yet); with several, open the release
+          const people = (role: 'featured' | 'producer', label: string, cur: Name[], children: ReactNode) => {
+            if (src.kind === 'track') return <EditCell kind="names" label={label} value={nm(cur)} onSave={(v) => E.setTrackPeople(src.t, role, v)}>{children}</EditCell>;
+            if (role === 'producer' && src.exec) return <EditCell kind="names" label="Executive producers" value={nm(cur)} onSave={(v) => E.setExecProducers(src.r, v)}>{children}</EditCell>;
+            const n = (st.ix.tracksByRelease.get(src.r.id) ?? []).length;
+            if (n > 1) return <EditCell kind="action" label={label} onEdit={() => { st.say(`${src.r.title} has ${n} songs — edit their ${role === 'featured' ? 'features' : 'producers'} in the tracklist`); nav(`/release/${src.r.id}`); }}>{children}</EditCell>;
+            return <EditCell kind="names" label={label} value={nm(cur)} onSave={async (v) => E.setTrackPeople(await E.ensureOnlyTrack(src.r, r.title), role, v)}>{children}</EditCell>;
+          };
           return (
             <tr key={r.key}>
-              <td className="thumb">{r.album ? <Link to={`/release/${r.album.id}`}><Cover src={r.cover} title={r.album.title} size={28} /></Link> : <Cover src={r.cover} title={r.title} size={28} />}</td>
-              <td><div className="title-cell"><Clip full={r.fullTitle ?? r.title}><Link to={r.titleTo} style={{ fontWeight: 600 }} title={r.fullTitle !== r.title ? r.fullTitle : undefined}>{r.title}</Link></Clip>{r.onRemove && <button type="button" className="btn sm ghost row-x" title={r.onRemove.label} aria-label={r.onRemove.label} onClick={r.onRemove.run}>×</button>}</div></td>
-              <td><Clip>{r.artists ? <NameList ns={r.artists} sep=" & " /> : r.artistText ?? (r.release ? <Credits release={r.release} /> : '')}</Clip></td>
-              <td><Clip><NameList ns={r.features} /></Clip></td>
-              <td><Clip><NameList ns={r.producers} note={r.producerNote} /></Clip></td>
-              <td><Clip>{r.album && <Link to={`/release/${r.album.id}`}>{r.album.title}</Link>}</Clip></td>
-              <td className="num muted small" style={{ whiteSpace: 'nowrap' }}>{r.date.length > 4 ? fmtDate(r.date) : r.date}</td>
+              <td className="thumb">{rel ? <EditCell kind="action" label="Cover" onEdit={() => setCoverFor(rel)}><Link to={`/release/${rel.id}`}><Cover src={r.cover} title={rel.title} size={28} /></Link></EditCell> : <Cover src={r.cover} title={r.title} size={28} />}</td>
+              <td><div className="title-cell"><EditCell kind="text" label="Title" value={src.kind === 'track' ? src.t.title : src.r.title} onSave={(v) => (src.kind === 'track' ? E.renameTrack(src.t, v) : E.renameRelease(src.r, v))}>
+                <Clip full={r.fullTitle ?? r.title}><Link to={r.titleTo} style={{ fontWeight: 600 }}>{r.title}</Link></Clip></EditCell>
+                {r.onRemove && <button type="button" className="btn sm ghost row-x" title={r.onRemove.label} aria-label={r.onRemove.label} onClick={r.onRemove.run}>×</button>}</div></td>
+              <td>{src.kind === 'track'
+                ? <EditCell kind="names" label="Artists" value={r.artists ? nm(r.artists) : (r.artistText ?? r.release?.artist_credit ?? '').split(/\s+&\s+/).filter(Boolean)} onSave={(v) => E.setTrackArtists(src.t, v)}><Clip>{r.artists ? <NameList ns={r.artists} sep=" & " /> : r.artistText ?? (r.release ? <Credits release={r.release} /> : '')}</Clip></EditCell>
+                : <EditCell kind="text" label="Artist" value={src.r.artist_credit ?? ''} onSave={(v) => E.setReleaseArtist(src.r, v)}><Clip><Credits release={src.r} /></Clip></EditCell>}</td>
+              <td>{people('featured', 'Features', r.features, <Clip><NameList ns={r.features} /></Clip>)}</td>
+              <td>{people('producer', 'Producers', r.producers, <Clip><NameList ns={r.producers} note={r.producerNote} /></Clip>)}</td>
+              <td>{rel ? <EditCell kind="text" label="Album / release title" value={rel.title} onSave={(v) => E.renameRelease(rel, v)}><Clip><Link to={`/release/${rel.id}`}>{rel.title}</Link></Clip></EditCell> : null}</td>
+              <td className="num muted small" style={{ whiteSpace: 'nowrap' }}>{rel ? <EditCell kind="text" label="Release date" placeholder="27 Nov 2017, 2017-11-27 or 2017" value={rel.date ?? (rel.year ? String(rel.year) : '')} onSave={(v) => E.setReleaseWhen(rel, v)}>{r.date.length > 4 ? fmtDate(r.date) : r.date || '\u00a0'}</EditCell> : null}</td>
               <td style={{ textAlign: 'center' }}><Fav on={!!fav} onToggle={() => void st.annotate(r.fav.type, r.fav.id, { favorite: !fav })} /></td>
             </tr>);
         })}</tbody>
       </table></div>}
       {open && !shown.length && <div className="small muted" style={{ padding: '8px 0' }}>Nothing matches “{q}”.</div>}
+      {coverFor && <ImagePicker title={`Cover for ${coverFor.title}`} onClose={() => setCoverFor(null)} resetLabel={coverFor.artwork_url ? 'Remove cover' : undefined}
+        onSet={async (u) => { await E.setReleaseCover(coverFor, u); st.say(u ? 'Cover updated' : 'Cover removed'); }} />}
     </section>
   );
 }
