@@ -4,6 +4,7 @@ import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, fmtMs, LinkBar, Li
 import { autoLinkRelease, findReleaseLabels, followLinks, tracklistSources } from '../lib/enrich';
 import AddToPlaylist from '../components/AddToPlaylist';
 import { player, usePlayer } from '../lib/player';
+import TypeSelect from '../components/TypeSelect';
 import { autoSplit, parseArtistCredit, splitNames } from '../lib/importSheet';
 import { fantanoSearch, mergeLinks } from '../lib/links';
 import {
@@ -12,9 +13,9 @@ import {
 } from '../lib/sources';
 import { norm, releaseArtists, releaseLabels, trackArtists, useStore } from '../lib/store';
 import PeopleInput from '../components/PeopleInput';
-import { ImagePicker } from '../components/ListBits';
+import { ImagePicker, shrink } from '../components/ListBits';
 import { songFeatures } from '../lib/features';
-import { RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
+import { type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
 
 export default function ReleasePage() {
@@ -300,6 +301,7 @@ export function ReleaseForm({ release, onClose, defaults }: { release?: Release;
     const date = f.date || null; const year = f.year ? Number(f.year) : date ? Number(date.slice(0, 4)) : null;
     const base = release ?? { id: uid(), source: 'manual', links: {}, ext: {}, created_at: now(), ...defaults };
     const ext = { ...base.ext }; if (parts.length > 1 && splitPick !== undefined) ext.credit_split = splitPick; else if (parts.length < 2) delete ext.credit_split;
+    if (f.artwork_url !== (base.artwork_url ?? '')) ext.art_manual = f.artwork_url ? now() : undefined; // your cover: matching won't replace it
     const r: Release = { ...base, ext, title: f.title.trim(), type: f.type, artist_credit: f.artist_credit.trim(), date, year, label: f.label || null, artwork_url: f.artwork_url || null, updated_at: now() } as Release;
     await st.upsert('releases', [r]);
     // Re-point primary artist credits if the artist text changed (or for a new release)
@@ -329,12 +331,20 @@ export function ReleaseForm({ release, onClose, defaults }: { release?: Release;
           <label className="row"><input type="checkbox" checked={split} onChange={(e) => setSplitPick(e.target.checked)} /> Separate artists</label>
           <span className="small muted">{split ? <>Credited to {parts.map((n, i) => <span key={n}>{i ? ' + ' : ''}<strong>{n}</strong>{known(n) ? '' : ' (new)'}</span>)}</> : <>Credited to one artist, <strong>{credit}</strong>{known(credit) ? '' : ' (new)'}</>}</span>
         </div>}
-        <label><span className="label">Type</span><select className="select" style={{ width: '100%' }} value={f.type} onChange={up('type')}>{[...new Set([...RELEASE_TYPES, f.type])].map((t) => <option key={t}>{t}</option>)}</select></label>
+        <label><span className="label">Type</span><TypeSelect style={{ width: '100%' }} value={f.type} onChange={(type) => setF({ ...f, type })} /></label>
         <label><span className="label">Release date</span><input className="input" style={{ width: '100%' }} type="date" value={f.date} onChange={up('date')} /></label>
         <label><span className="label">Year (if no exact date)</span><input className="input num" style={{ width: '100%' }} inputMode="numeric" value={f.year} onChange={up('year')} /></label>
         <label><span className="label">Labels, comma-separated</span><input className="input" style={{ width: '100%' }} value={labels} onChange={(e) => setLabels(e.target.value)} /></label>
         <label className="full"><span className="label">Executive producer(s), comma-separated</span><input className="input" style={{ width: '100%' }} value={prod} onChange={(e) => setProd(e.target.value)} /></label>
-        <label className="full"><span className="label">Artwork URL</span><input className="input" style={{ width: '100%' }} value={f.artwork_url} onChange={up('artwork_url')} placeholder="https://…" /></label>
+        <div className="full"><span className="label">Cover — paste a link, upload an image, or paste one here with ⌘V</span>
+          <div className="row" style={{ flexWrap: 'nowrap' }}>
+            {f.artwork_url && <Cover src={f.artwork_url} title={f.title || 'Cover'} size={40} />}
+            <input className="input" style={{ flex: 1 }} aria-label="Artwork URL" value={f.artwork_url.startsWith('data:') ? '(uploaded image)' : f.artwork_url} placeholder="https://…"
+              onChange={(e) => setF({ ...f, artwork_url: e.target.value === '(uploaded image)' ? f.artwork_url : e.target.value })}
+              onPaste={async (e) => { const img = [...e.clipboardData.items].find((i) => i.type.startsWith('image/'))?.getAsFile(); if (img) { e.preventDefault(); setF({ ...f, artwork_url: await shrink(img, 1000) }); } }} />
+            <label className="btn">Upload<input type="file" accept="image/*" hidden onChange={async (e) => { const file = e.target.files?.[0]; if (file) setF({ ...f, artwork_url: await shrink(file, 1000) }); }} /></label>
+            {f.artwork_url && <button type="button" className="btn ghost" onClick={() => setF({ ...f, artwork_url: '' })}>Clear</button>}
+          </div></div>
         <div className="full row"><span className="spacer" /><button type="button" className="btn" onClick={onClose}>Cancel</button><button className="btn primary">{release ? 'Save changes' : 'Add release'}</button></div>
       </form>
     </Modal>
@@ -435,16 +445,34 @@ export function parseTracklist(text: string): SourceTrack[] {
   return out;
 }
 
-function PasteTracklist({ onUse, saving }: { onUse: (t: SourceTrack[]) => void; saving: boolean }) {
+function PasteTracklist({ onUse, saving, drop = [] }: { onUse: (t: SourceTrack[]) => void; saving: boolean; drop?: string[] }) {
   const [text, setText] = useState('');
+  const [reading, setReading] = useState<number | null>(null);
+  const { say } = useStore();
+  // A screenshot of a tracklist: read the text out of it and put it in the box to check before using
+  const fromImage = async (f?: Blob | null) => {
+    if (!f) return;
+    setReading(0);
+    try {
+      const { readImageText, cleanOcrTracklist } = await import('../lib/ocr');
+      const got = cleanOcrTracklist(await readImageText(f, setReading), drop);
+      if (!got) say('Couldn’t find any song titles in that picture');
+      else { setText((t) => (t.trim() ? `${t.trim()}\n${got}` : got)); say('Read the screenshot — check the songs, fix anything, then Use this'); }
+    } catch (e) { say(`Couldn’t read that picture: ${(e as Error).message}`); }
+    finally { setReading(null); }
+  };
   const tracks = useMemo(() => parseTracklist(text), [text]);
   return (
     <div className="panel" style={{ marginBottom: 10, padding: 12 }}>
       <div className="row" style={{ justifyContent: 'space-between', flexWrap: 'nowrap' }}>
-        <div><strong>Paste a tracklist</strong> <span className="muted small">{tracks.length ? `${tracks.length} songs` : 'e.g. copied from AOTY or Wikipedia, one song per line'}</span></div>
-        <button className="btn sm primary" disabled={!tracks.length || saving} onClick={() => onUse(tracks)}>{saving ? 'Saving…' : 'Use this'}</button>
+        <div><strong>Paste a tracklist</strong> <span className="muted small">{tracks.length ? `${tracks.length} songs` : 'one song per line — or a screenshot of one'}</span></div>
+        <div className="row" style={{ flexWrap: 'nowrap' }}>
+          <label className={`btn sm${reading !== null ? ' disabled' : ''}`}>{reading !== null ? `Reading… ${Math.round(reading * 100)}%` : 'Upload screenshot'}<input type="file" accept="image/*" hidden disabled={reading !== null} onChange={(e) => { void fromImage(e.target.files?.[0]); e.target.value = ''; }} /></label>
+          <button className="btn sm primary" disabled={!tracks.length || saving} onClick={() => onUse(tracks)}>{saving ? 'Saving…' : 'Use this'}</button>
+        </div>
       </div>
-      <textarea className="textarea" style={{ marginTop: 8, minHeight: 110 }} placeholder={'1. No Safe Corners\n2. Rhyme Scheme\n3. Steppin’ With The Steppers'} value={text} onChange={(e) => setText(e.target.value)} />
+      <textarea className="textarea" style={{ marginTop: 8, minHeight: 110 }} placeholder={'1. No Safe Corners\n2. Rhyme Scheme\n3. Steppin’ With The Steppers'} value={text} onChange={(e) => setText(e.target.value)}
+        onPaste={(e) => { const img = [...e.clipboardData.items].find((i) => i.type.startsWith('image/'))?.getAsFile(); if (img) { e.preventDefault(); void fromImage(img); } }} />
       {tracks.length > 0 && <div className="small muted" style={{ marginTop: 6 }}>{tracks.slice(0, 6).map((t) => t.title).join(' · ')}{tracks.length > 6 ? ' …' : ''}</div>}
     </div>
   );
@@ -482,7 +510,7 @@ function TracklistChooser({ release, hasTracks, onClose, onAppleSearch }: { rele
           </div>
           {Array.isArray(v) && <div className="small muted" style={{ marginTop: 6 }}>{v.slice(0, 6).map((t) => t.title).join(' · ')}{v.length > 6 ? ' …' : ''}</div>}
         </div>); })}
-      <PasteTracklist onUse={(tracks) => use('Pasted', tracks)} saving={saving === 'Pasted'} />
+      <PasteTracklist onUse={(tracks) => use('Pasted', tracks)} saving={saving === 'Pasted'} drop={[release.artist_credit ?? '', ...releaseArtists(st.ix, release.id).map((x) => x.name), ...releaseLabels(st.ix, release.id).map((l) => l.name), release.label ?? '']} />
       {!release.ext.apple_id && <div className="panel" style={{ padding: 12 }}><div className="row" style={{ justifyContent: 'space-between' }}><span><strong>Apple Music</strong> <span className="muted small">not linked yet</span></span><button className="btn sm" onClick={onAppleSearch}>Search Apple Music</button></div></div>}
       {!sources.length && <div className="small muted" style={{ marginTop: 8 }}>No linked sources yet — add a Wikipedia, Deezer or MusicBrainz link with Edit links.</div>}
     </Modal>

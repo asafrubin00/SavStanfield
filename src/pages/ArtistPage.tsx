@@ -9,7 +9,7 @@ import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists,
 import { artistLabels, norm, releaseArtists, shownInArtists, trackArtists, useStore } from '../lib/store';
 import { CreditSection, releaseRow, trackRow } from '../components/CreditTable';
 import { SortSelect, usePref, flip } from '../components/controls';
-import { type Artist, type Release, type Track } from '../lib/types';
+import { customTypes, RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
 import { linkQueue } from '../lib/queue';
 
@@ -19,6 +19,19 @@ const SHOWN: [string, string[]][] = [
   ['EPs', ['EP']], ['Compilations', ['Compilation', 'Greatest Hits']], ['Soundtracks', ['Soundtrack']],
 ];
 const HIDDEN: [string, string[]][] = [['Singles', ['Single']], ['Leaks', ['Leak', 'Leak Compilation', 'Unreleased Album']], ['Appearances', ['Guest Appearance']]];
+
+/** A heading of covers (Albums, Mixtapes…) you can fold away; open unless you've closed it, remembered across artists. */
+function GridSection({ name, count, children }: { name: string; count?: number; children: React.ReactNode }) {
+  const [open, setOpen] = usePref(`artist.grid.${name}`, true);
+  return (
+    <section>
+      <button type="button" className="sec-toggle grid-toggle" aria-expanded={open} onClick={() => setOpen(!open)}>
+        <span className="caret" aria-hidden>{open ? '▾' : '▸'}</span><span className="h-sec">{name}</span>{count !== undefined && <span className="muted">{count}</span>}
+      </button>
+      {open && children}
+    </section>
+  );
+}
 
 export default function ArtistPage() {
   const { id } = useParams();
@@ -70,7 +83,8 @@ export default function ArtistPage() {
   };
   const sorted = flip([...discog].sort(sorter[discSort] ?? sorter.newest), discRev, (r) => (discSort === 'rating' ? rt(r) > 0 : true));
   // Main sections in a fixed order; singles, leaks and guest appearances sit behind a reveal
-  const sectionOf = (t: string) => SHOWN.find(([, ts]) => ts.includes(t))?.[0] ?? (HIDDEN.flatMap(([, ts]) => ts).includes(t) ? null : 'Other');
+  // Your own types ("Stanfield Version") get a heading each; anything else unlisted goes under Other
+  const sectionOf = (t: string) => SHOWN.find(([, ts]) => ts.includes(t))?.[0] ?? (HIDDEN.flatMap(([, ts]) => ts).includes(t) ? null : RELEASE_TYPES.includes(t) ? 'Other' : t);
   const byType = new Map<string, Release[]>();
   for (const r of sorted) {
     const sec = sectionOf(r.type); if (!sec) continue;
@@ -79,7 +93,7 @@ export default function ArtistPage() {
   }
   const hiddenRel = (types: string[]) => sorted.filter((r) => types.includes(r.type));
   const labelsHere = artistLabels(ix, a.id);
-  const typeOrder = grouped ? [...SHOWN.map(([n]) => n), 'Other'].filter((t) => byType.has(t)) : [...byType.keys()];
+  const typeOrder = grouped ? [...SHOWN.map(([n]) => n), ...customTypes(discog), 'Other'].filter((t) => byType.has(t)) : [...byType.keys()];
   const rated = discog.map((r) => ix.ann.get(`release:${r.id}`)?.rating).filter(Boolean) as number[];
   const avg = rated.length ? rated.reduce((s, x) => s + x, 0) / rated.length : null;
   const concerts = data.concerts.filter((c) => c.artist_id === a.id);
@@ -159,12 +173,9 @@ export default function ArtistPage() {
             <label className="row"><input type="checkbox" checked={showCounts} onChange={(e) => setShowCounts(e.target.checked)} /> Show counts</label>
           </div>}
           {!discog.length && <div className="empty">No releases yet. <br /><button className="btn" onClick={() => setDisco(true)}>Import discography</button></div>}
-          {typeOrder.map((t) => (
-            <section key={t}>
-              <h2 className="h-sec">{t} {showCounts && <span className="muted">{byType.get(t)!.length}</span>}</h2>
-              <div className="grid tight">{byType.get(t)!.map((r) => <ReleaseTile key={r.id} r={r} showArtist={r.artist_credit !== a.name} />)}</div>
-            </section>
-          ))}
+          {typeOrder.map((t) => <GridSection key={t} name={t} count={showCounts ? byType.get(t)!.length : undefined}>
+            <div className="grid tight">{byType.get(t)!.map((r) => <ReleaseTile key={r.id} r={r} showArtist={r.artist_credit !== a.name} />)}</div>
+          </GridSection>)}
           {(() => {
             const singles = hiddenRel(HIDDEN[0][1]); const leaks = hiddenRel(HIDDEN[1][1]); const guest = hiddenRel(HIDDEN[2][1]);
             const load = (rs: Release[]) => () => void st.loadReleaseTracks(rs.map((r) => r.id));
@@ -267,6 +278,7 @@ function DiscographyImporter({ artist, onClose }: { artist: Artist; onClose: () 
   const { ix, upsert, say } = st;
   const [rows, setRows] = useState<Row[] | null>(null);
   const [status, setStatus] = useState('');
+  const [impSort, setImpSort] = usePref<{ col: string; asc: boolean }>('import.sort', { col: 'date', asc: true });
   const [sel, setSel] = useState<Set<string>>(new Set());
   const [types, setTypes] = useState<Set<string>>(new Set(['Album', 'Mixtape', 'EP', 'Compilation', 'Soundtrack', 'Live', 'Other']));
   const [mbChoices, setMbChoices] = useState<{ id: string; name: string; disambiguation?: string; country?: string }[] | null>(null);
@@ -328,7 +340,10 @@ function DiscographyImporter({ artist, onClose }: { artist: Artist; onClose: () 
     say(`Added ${rels.length} releases — fetching links in the background`); onClose();
   }
 
-  const visible = rows?.filter((r) => types.has(r.type) || (r.type === 'Single' && types.has('Single'))) ?? [];
+  const sortVal = (r: NonNullable<typeof rows>[number], c: string) => c === 'title' ? r.title : c === 'type' ? r.type : c === 'source' ? [r.apple && 'Apple', r.mb && 'MB'].filter(Boolean).join(' + ') : r.date ?? '';
+  const visible = (rows?.filter((r) => types.has(r.type) || (r.type === 'Single' && types.has('Single'))) ?? [])
+    .slice().sort((x, y) => { const a = sortVal(x, impSort.col), b = sortVal(y, impSort.col); if (!a !== !b) return a ? -1 : 1; const c = a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }); return impSort.asc ? c : -c; });
+  const impTh = (c: string, label: string) => <th style={{ cursor: 'pointer' }} onClick={() => setImpSort(impSort.col === c ? { col: c, asc: !impSort.asc } : { col: c, asc: true })} aria-sort={impSort.col === c ? (impSort.asc ? 'ascending' : 'descending') : undefined}>{label}{impSort.col === c ? (impSort.asc ? ' ↑' : ' ↓') : ''}</th>;
   const allTypes = [...new Set(rows?.map((r) => r.type) ?? [])];
   return (
     <Modal title={`Import ${artist.name}'s discography`} onClose={onClose} wide>
@@ -344,7 +359,8 @@ function DiscographyImporter({ artist, onClose }: { artist: Artist; onClose: () 
           <button className="btn sm" onClick={() => setSel(new Set(visible.filter((r) => !r.have).map((r) => r.key)))}>Select all shown</button>
           <button className="btn sm" onClick={() => setSel(new Set())}>Select none</button>
         </div>
-        <div style={{ maxHeight: '55vh', overflowY: 'auto' }}><table className="table"><tbody>{visible.map((r) => (
+        <div style={{ maxHeight: '55vh', overflowY: 'auto' }}><table className="table">
+          <thead><tr><th /><th />{impTh('title', 'Name')}{impTh('type', 'Type')}{impTh('date', 'Date')}{impTh('source', 'Source')}<th /></tr></thead><tbody>{visible.map((r) => (
           <tr key={r.key} style={{ opacity: r.have ? .55 : 1 }}>
             <td style={{ width: 30 }}><input type="checkbox" disabled={!!r.have} checked={sel.has(r.key)} aria-label={`Select ${r.title}`} onChange={(e) => { const n = new Set(sel); if (e.target.checked) n.add(r.key); else n.delete(r.key); setSel(n); }} /></td>
             <td className="thumb"><Cover src={r.artwork} title={r.title} size={36} /></td>

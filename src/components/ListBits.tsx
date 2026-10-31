@@ -36,7 +36,7 @@ export function ListCover({ list, onClick }: { list: List; items?: ListItem[]; o
 }
 
 /** Shrink an image to a square-ish JPEG data URL so it can be stored with the list. */
-async function shrink(file: Blob, max = 700): Promise<string> {
+export async function shrink(file: Blob, max = 700): Promise<string> {
   const bmp = await createImageBitmap(file);
   const scale = Math.min(1, max / Math.max(bmp.width, bmp.height));
   const c = document.createElement('canvas'); c.width = Math.round(bmp.width * scale); c.height = Math.round(bmp.height * scale);

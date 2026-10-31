@@ -79,3 +79,5 @@ export const RELEASE_TYPES = [
   'Album', 'Mixtape', 'EP', 'Single', 'Collaboration', 'Compilation', 'Deluxe', 'Soundtrack',
   'Live', 'Greatest Hits', 'Leak', 'Leak Compilation', 'Unreleased Album', 'Guest Appearance', 'Other',
 ];
+/** Types you've made up yourself ("Stanfield Version"): any type on a release that isn't one of the standard ones. */
+export const customTypes = (releases: { type: string }[]) => [...new Set(releases.map((r) => r.type).filter((t) => t && !RELEASE_TYPES.includes(t)))].sort((a, b) => a.localeCompare(b));

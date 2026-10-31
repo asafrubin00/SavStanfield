@@ -311,3 +311,5 @@ details summary { cursor: pointer; }
 .cell-names { position: relative; z-index: 30; min-width: 240px; background: var(--surface); border-radius: var(--radius-s); box-shadow: 0 6px 24px rgba(0,0,0,.2); padding: 4px; }
 .cell-names .people-input { font-size: 14px; }
 .cell-hint { display: block; padding: 2px 4px 0; font-size: 11px; }
+.grid-toggle { margin: 22px 0 10px; }
+.modal .table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }

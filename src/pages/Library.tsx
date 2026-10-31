@@ -139,7 +139,7 @@ export default function Library() {
                 <tr key={r.id}><td><EditCell kind="action" label="Cover" onEdit={() => setCoverFor(r)}><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></EditCell></td>
                   <td><EditCell kind="text" label="Title" value={r.title} onSave={(v) => E.renameRelease(r, v)}><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link></EditCell></td>
                   <td><EditCell kind="text" label="Artist" value={r.artist_credit ?? ''} onSave={(v) => E.setReleaseArtist(r, v)}><Credits release={r} /></EditCell></td>
-                  <td className="muted"><EditCell kind="select" label="Type" value={r.type} options={[...RELEASE_TYPES]} onSave={(v) => E.setReleaseType(r, v)}>{r.type}</EditCell></td>
+                  <td className="muted"><EditCell kind="type" label="Type" value={r.type} onSave={(v) => E.setReleaseType(r, v)}>{r.type}</EditCell></td>
                   <td className="num muted" style={{ whiteSpace: 'nowrap' }}><EditCell kind="text" label="Release date" placeholder="27 Nov 2017, 2017-11-27 or 2017" value={r.date ?? (r.year ? String(r.year) : '')} onSave={(v) => E.setReleaseWhen(r, v)}>{r.date ? fmtDate(r.date) : r.year ?? '\u00a0'}</EditCell></td>
                   <td><QuickRate type="release" id={r.id} /></td></tr>))}</tbody>
             </table></div>

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useNavigate } from 'react-router-dom';
 import PeopleInput from './PeopleInput';
+import TypeSelect from './TypeSelect';
 
 /*
  * Double-click a table cell to edit it in place. Enter (or clicking away) saves, Esc cancels.
@@ -11,6 +12,7 @@ type Props =
   | { kind: 'text'; value: string; onSave: (v: string) => Promise<unknown> | void; placeholder?: string; children: ReactNode; label: string }
   | { kind: 'names'; value: string[]; onSave: (v: string[]) => Promise<unknown> | void; placeholder?: string; children: ReactNode; label: string }
   | { kind: 'select'; value: string; options: string[]; onSave: (v: string) => Promise<unknown> | void; children: ReactNode; label: string }
+  | { kind: 'type'; value: string; onSave: (v: string) => Promise<unknown> | void; children: ReactNode; label: string }
   | { kind: 'action'; onEdit: () => void; children: ReactNode; label: string };
 
 export default function EditCell(p: Props) {
@@ -23,6 +25,7 @@ export default function EditCell(p: Props) {
   if (editing && p.kind !== 'action') {
     const done = () => setEditing(false);
     if (p.kind === 'names') return <NamesEditor value={p.value} placeholder={p.placeholder} label={p.label} onCancel={done} onSave={async (v) => { done(); await p.onSave(v); }} />;
+    if (p.kind === 'type') return <TypeSelect className="select cell-input" autoFocus value={p.value} onBlur={done} onChange={async (v) => { done(); if (v !== p.value) await p.onSave(v); }} />;
     if (p.kind === 'select') return (
       <select className="select cell-input" autoFocus aria-label={p.label} defaultValue={p.value} onBlur={done}
         onKeyDown={(e) => { if (e.key === 'Escape') done(); }} onChange={async (e) => { done(); await p.onSave(e.target.value); }}>
