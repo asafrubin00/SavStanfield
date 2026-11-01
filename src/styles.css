@@ -313,3 +313,12 @@ details summary { cursor: pointer; }
 .cell-hint { display: block; padding: 2px 4px 0; font-size: 11px; }
 .grid-toggle { margin: 22px 0 10px; }
 .modal .table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
+.pick-tile { position: relative; cursor: pointer; border-radius: var(--radius-s); outline: 2px solid transparent; outline-offset: 3px; }
+.pick-tile.on { outline-color: var(--accent); }
+.pick-tile .pick-box { position: absolute; top: 8px; left: 8px; z-index: 3; width: 20px; height: 20px; pointer-events: none; }
+.pick-tile .tile-rate { display: none; }
+.table tr.picked td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.bulk-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 64px; z-index: 55; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: calc(100vw - 32px);
+  background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 10px 14px; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+.bulk-sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+.bulk-bar .select, .bulk-bar .input { padding: 5px 8px; font-size: 14px; }

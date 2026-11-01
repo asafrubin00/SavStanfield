@@ -7,6 +7,7 @@ import { autoLinkArtist } from '../lib/enrich';
 import { parseArtistCredit } from '../lib/importSheet';
 import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists, type AppleAlbum, type MBGroup } from '../lib/sources';
 import { artistLabels, norm, releaseArtists, shownInArtists, trackArtists, useStore } from '../lib/store';
+import { useEdits } from '../lib/edits';
 import { CreditSection, releaseRow, trackRow } from '../components/CreditTable';
 import { SortSelect, usePref, flip } from '../components/controls';
 import { customTypes, RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
@@ -210,6 +211,7 @@ export default function ArtistPage() {
 
 export function ArtistForm({ artist, onClose }: { artist?: Artist; onClose: () => void }) {
   const { upsert, ix, setArtistLabels, findFeaturesFor, say } = useStore();
+  const edits = useEdits();
   const nav = useNavigate();
   const manualLabels = artist ? (ix.artistLabelsByArtist.get(artist.id) ?? []).map((x) => ix.labels.get(x.label_id)?.name).filter(Boolean).join(', ') : '';
   const [labels, setLabels] = useState(manualLabels);
@@ -227,7 +229,11 @@ export function ArtistForm({ artist, onClose }: { artist?: Artist; onClose: () =
         const baseExt = (artist?.ext ?? {}) as Artist['ext'];
         const ext = membersChanged ? { ...baseExt, members: nextMembers, members_manual: true } as Artist['ext'] : baseExt;
         const a: Artist = { ...(artist ?? { id: uid(), links: {}, ext: {}, created_at: now() }), ext, name: f.name.trim(), aliases: f.aliases.split(',').map((s) => s.trim()).filter(Boolean), image_url: f.image_url || null, bio: f.bio || null, is_producer: f.is_producer, updated_at: now() } as Artist;
+        // Renamed: keep the old name as another name, and change it on their releases and songs too
+        const renamed = artist && norm(artist.name) !== norm(a.name);
+        if (renamed && !a.aliases.some((x) => norm(x) === norm(artist.name))) a.aliases = [...a.aliases, artist.name];
         await upsert('artists', [a]);
+        if (renamed) void edits.renameArtist(a, artist.name).then((n) => say(`Renamed to ${a.name}${n ? ` on ${n} release${n === 1 ? '' : 's'} and song${n === 1 ? '' : 's'}` : ''} — “${artist.name}” kept as another name`));
         if (labels !== manualLabels) await setArtistLabels(a.id, labels.split(','));
         onClose(); if (!artist) { nav(`/artist/${a.id}`); void findFeaturesFor(a).then((n) => n && say(`Found ${n} feature${n > 1 ? 's' : ''} for ${a.name}`)).catch(() => undefined); }
       }}>

@@ -1,7 +1,8 @@
 import { useCallback } from 'react';
 import { autoSplit, parseArtistCredit } from './importSheet';
 import { norm, useStore } from './store';
-import type { Release, Track } from './types';
+import { adapter } from './db';
+import type { Artist, Release, Track } from './types';
 import { now, uid } from './util';
 
 /** "2017", "2017-11-27", "27 Nov 2017", "Nov 2017" → { date, year }; null if it can't be read. Empty clears it. */
@@ -50,7 +51,34 @@ export function useEdits() {
     return t;
   }, [st]);
 
+  /**
+   * An artist's new name everywhere it's written: their releases' and songs' artist text ("Eminem & DJ Green Lantern"),
+   * and "(feat. …)" in song titles they're on. The old name is kept as one of their other names, for matching.
+   */
+  const renameArtist = useCallback(async (a: Artist, oldName: string): Promise<number> => {
+    const esc = oldName.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    if (!esc || norm(oldName) === norm(a.name)) return 0;
+    const re = new RegExp(`(?<![\\p{L}\\p{N}])${esc}(?![\\p{L}\\p{N}])`, 'giu');
+    const fix = (s?: string | null) => (s && re.test(s) ? (re.lastIndex = 0, s.replace(re, a.name)) : null);
+    const cr = st.ix.creditsByArtist.get(a.id) ?? [];
+    const relIds = [...new Set(cr.map((c) => c.release_id).filter(Boolean) as string[])];
+    const rels = relIds.map((id) => st.ix.releases.get(id)).filter(Boolean) as Release[];
+    const relOut = rels.flatMap((r) => { re.lastIndex = 0; const v = fix(r.artist_credit); return v ? [{ ...r, artist_credit: v, updated_at: now() }] : []; });
+    if (relOut.length) await st.upsert('releases', relOut);
+    const trackIds = [...new Set(cr.map((c) => c.track_id).filter(Boolean) as string[])];
+    const have = trackIds.map((id) => st.ix.tracks.get(id)).filter(Boolean) as Track[];
+    const missing = trackIds.filter((id) => !st.ix.tracks.has(id));
+    const tracks = [...have, ...(missing.length ? await adapter.tracksByIds(missing) : [])];
+    const trOut = tracks.flatMap((t) => {
+      re.lastIndex = 0; const ac = fix(t!.artist_credit); re.lastIndex = 0; const ti = fix(t!.title);
+      return ac || ti ? [{ ...t!, artist_credit: ac ?? t!.artist_credit, title: ti ?? t!.title, updated_at: now() }] : [];
+    });
+    if (trOut.length) await st.saveTracksQuiet(trOut);
+    return relOut.length + trOut.length;
+  }, [st]);
+
   return {
+    renameArtist,
     renameRelease: (r: Release, title: string) => (title.trim() && title.trim() !== r.title ? saveRelease(r, { title: title.trim() }) : Promise.resolve()),
     setReleaseWhen: async (r: Release, s: string) => { const w = parseWhen(s); if (!w) { st.say(`Couldn't read “${s}” as a date — try 2017-11-27, 27 Nov 2017 or 2017`); return; } await saveRelease(r, w); },
     setReleaseType: (r: Release, type: string) => saveRelease(r, { type }),

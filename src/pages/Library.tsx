@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
+import BulkBar from '../components/BulkBar';
 import { Link, useSearchParams } from 'react-router-dom';
 import { MultiSelect, RatingSelect, ratingMatches, SortSelect } from '../components/controls';
 import { Cover, Credits, fmtDate, QuickRate, ReleaseTile } from '../components/ui';
@@ -16,6 +17,10 @@ export default function Library() {
   const { data, ix } = useStore();
   const [sp, setSp] = useSearchParams();
   const [shown, setShown] = usePageState('shown', PAGE);
+  // Bulk edit: tick releases (shift-click for a range), then act on them all from the bar at the bottom
+  const [selecting, setSelecting] = useState(false);
+  const [sel, setSel] = useState<Set<string>>(new Set());
+  const lastPick = useRef<number | null>(null);
   const [adding, setAdding] = useState(false);
   const [coverFor, setCoverFor] = useState<import('../lib/types').Release | null>(null);
   const E = useEdits(); const { say } = useStore();
@@ -90,6 +95,13 @@ export default function Library() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.releases, ix, sp, producersByRelease]);
 
+  function pick(i: number, range: boolean) {
+    const id = rows[i]?.id; if (!id) return;
+    const next = new Set(sel); const on = !sel.has(id);
+    const [a, b] = range && lastPick.current !== null ? [Math.min(lastPick.current, i), Math.max(lastPick.current, i)] : [i, i];
+    for (let k = a; k <= b; k++) { const x = rows[k]?.id; if (x) { if (on) next.add(x); else next.delete(x); } }
+    lastPick.current = i; setSel(next);
+  }
   const active = [...sp.keys()].filter((k) => !['view', 'sort', 'when'].includes(k)).length;
 
   return (
@@ -109,6 +121,7 @@ export default function Library() {
             <div className="seg" role="group" aria-label="View">
               <button className={view === 'grid' ? 'on' : ''} onClick={() => set('view', null)}>Covers</button>
               <button className={view === 'table' ? 'on' : ''} onClick={() => set('view', 'table')}>Table</button></div>
+            <button type="button" className={`btn${selecting ? ' primary' : ''}`} aria-pressed={selecting} onClick={() => { setSelecting(!selecting); setSel(new Set()); lastPick.current = null; }}>{selecting ? 'Done' : 'Select'}</button>
           </div>
           <div className="filter-bar panel" aria-label="Filters">
             <label><span className="label">Title, artist or label</span><input className="input" style={{ width: '100%' }} value={get('q')} onChange={(e) => set('q', e.target.value)} placeholder="Filter…" /></label>
@@ -131,12 +144,15 @@ export default function Library() {
             {active > 0 && <button className="btn" onClick={() => setSp(new URLSearchParams(Object.fromEntries([...sp].filter(([k]) => k === 'view' || k === 'sort' || k === 'when'))), { replace: true })}>Clear filters</button>}
           </div>
           {!rows.length ? <div className="empty">Nothing matches these filters.</div> : view === 'grid' ? (
-            <div className="grid">{rows.slice(0, shown).map((r) => <ReleaseTile key={r.id} r={r} />)}</div>
+            <div className="grid">{rows.slice(0, shown).map((r, i) => selecting
+              ? <div key={r.id} className={`pick-tile${sel.has(r.id) ? ' on' : ''}`} onClickCapture={(e) => { e.preventDefault(); e.stopPropagation(); pick(i, e.shiftKey); }}>
+                  <input type="checkbox" className="pick-box" checked={sel.has(r.id)} readOnly aria-label={`Select ${r.title}`} /><ReleaseTile r={r} /></div>
+              : <ReleaseTile key={r.id} r={r} />)}</div>
           ) : (
             <div className="table-wrap"><table className="table">
-              <thead><tr><th className="thumb" /><th style={{ cursor: 'pointer' }} onClick={() => sortBy('title')}>Title{arrow('title', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('artist')}>Artist{arrow('artist', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('type')}>Type{arrow('type', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('date-desc')}>Date{arrow('date-desc', false)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('rating')}>Rating{arrow('rating', false)}</th></tr></thead>
+              <thead><tr>{selecting && <th style={{ width: 30 }}><input type="checkbox" aria-label="Select all" checked={sel.size > 0 && sel.size === rows.length} onChange={(e) => setSel(e.target.checked ? new Set(rows.map((r) => r.id)) : new Set())} /></th>}<th className="thumb" /><th style={{ cursor: 'pointer' }} onClick={() => sortBy('title')}>Title{arrow('title', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('artist')}>Artist{arrow('artist', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('type')}>Type{arrow('type', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('date-desc')}>Date{arrow('date-desc', false)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('rating')}>Rating{arrow('rating', false)}</th></tr></thead>
               <tbody>{rows.slice(0, shown).map((r) => (
-                <tr key={r.id}><td><EditCell kind="action" label="Cover" onEdit={() => setCoverFor(r)}><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></EditCell></td>
+                <tr key={r.id} className={sel.has(r.id) ? 'picked' : undefined}>{selecting && <td><input type="checkbox" checked={sel.has(r.id)} aria-label={`Select ${r.title}`} onClick={(e) => pick(rows.indexOf(r), e.shiftKey)} readOnly /></td>}<td><EditCell kind="action" label="Cover" onEdit={() => setCoverFor(r)}><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></EditCell></td>
                   <td><EditCell kind="text" label="Title" value={r.title} onSave={(v) => E.renameRelease(r, v)}><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link></EditCell></td>
                   <td><EditCell kind="text" label="Artist" value={r.artist_credit ?? ''} onSave={(v) => E.setReleaseArtist(r, v)}><Credits release={r} /></EditCell></td>
                   <td className="muted"><EditCell kind="type" label="Type" value={r.type} onSave={(v) => E.setReleaseType(r, v)}>{r.type}</EditCell></td>
@@ -147,6 +163,8 @@ export default function Library() {
           {rows.length > shown && <div style={{ textAlign: 'center', marginTop: 24 }}><button className="btn" onClick={() => setShown((s) => s + PAGE * 2)}>Show more ({(rows.length - shown).toLocaleString()} left)</button></div>}
         </section>
       </div>
+      {selecting && <div style={{ height: 120 }} />}
+      {selecting && <BulkBar ids={[...sel].filter((id) => ix.releases.has(id))} total={rows.length} onSelectAll={() => setSel(new Set(rows.map((r) => r.id)))} onClear={() => setSel(new Set())} />}
       {adding && <ReleaseForm onClose={() => setAdding(false)} />}
       {coverFor && <ImagePicker title={`Cover for ${coverFor.title}`} onClose={() => setCoverFor(null)} resetLabel={coverFor.artwork_url ? 'Remove cover' : undefined}
         onSet={async (u) => { await E.setReleaseCover(coverFor, u); say(u ? 'Cover updated' : 'Cover removed'); }} />}
