@@ -5,6 +5,8 @@ import { autoLinkRelease, findReleaseLabels, followLinks, tracklistSources } fro
 import AddToPlaylist from '../components/AddToPlaylist';
 import { player, usePlayer } from '../lib/player';
 import TypeSelect from '../components/TypeSelect';
+import { CriticLines } from '../components/Critics';
+import { isAuto, type Src } from '../lib/critics';
 import { autoSplit, parseArtistCredit, splitNames } from '../lib/importSheet';
 import { fantanoSearch, mergeLinks } from '../lib/links';
 import {
@@ -225,7 +227,7 @@ export default function ReleasePage() {
         </div>
 
         <div className="stack">
-          <AnnotationPanel type="release" id={r.id} />
+          <AnnotationPanel type="release" id={r.id} extra={<CriticLines release={r} />} />
           {producers.length > 0 && <div className="panel">
             <div className="label">Producers</div>
             {producers.map(({ a, exec, n }) => <div key={a.id} className="row" style={{ padding: '3px 0' }}>
@@ -261,10 +263,13 @@ function CriticScores({ release, artistName }: { release: Release; artistName: s
   return (
     <div>
       {scores.length > 0 && <table className="table" style={{ marginBottom: 12 }}><tbody>{scores.map((s) => (
-        <tr key={s.id}><td style={{ fontWeight: 600 }}>{s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.source}</a> : s.source}</td>
+        <tr key={s.id}><td style={{ fontWeight: 600 }}>{s.url ? <a href={s.url} target="_blank" rel="noreferrer">{s.source}</a> : s.source}{isAuto(s) && <span className="small muted" style={{ fontWeight: 400 }} title="Matched automatically from The Fork / The Drop"> · auto</span>}</td>
           <td className="num">{s.score ?? '—'} <span className="muted">/ {s.max}</span></td>
           <td style={{ width: 120 }}><div className="progress"><div style={{ width: `${((s.score ?? 0) / s.max) * 100}%` }} /></div></td>
-          <td style={{ textAlign: 'right' }}><button className="btn sm ghost" onClick={() => remove('critic_scores', [s.id])}>Remove</button></td></tr>))}</tbody></table>}
+          <td style={{ textAlign: 'right' }}><button className="btn sm ghost" title={isAuto(s) ? 'Removes it and stops matching this source for this album' : undefined} onClick={async () => {
+            await remove('critic_scores', [s.id]);
+            if (isAuto(s)) { const src = s.id.split(':')[1] as Src; const cur = ix.releases.get(release.id) ?? release; await upsert('releases', [{ ...cur, ext: { ...cur.ext, critic_off: { ...((cur.ext as Record<string, unknown>).critic_off as object ?? {}), [src]: true }, critic_pin: { ...((cur.ext as Record<string, unknown>).critic_pin as object ?? {}), [src]: undefined } }, updated_at: new Date().toISOString() }]); }
+          }}>Remove</button></td></tr>))}</tbody></table>}
       <form className="row" onSubmit={async (e) => { e.preventDefault(); if (!score) return; await upsert('critic_scores', [{ id: uid(), release_id: release.id, source: src, score: Number(score), max, url: url || null }]); setScore(''); setUrl(''); }}>
         <select className="select" value={src} onChange={(e) => setSrc(e.target.value)} aria-label="Source">{CRITICS.map(([c]) => <option key={c}>{c}</option>)}</select>
         <input className="input num" style={{ width: 80 }} inputMode="decimal" placeholder={`/ ${max}`} value={score} onChange={(e) => setScore(e.target.value)} aria-label="Score" />

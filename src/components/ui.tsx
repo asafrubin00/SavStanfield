@@ -65,12 +65,13 @@ function AutoText({ label, value, onSave, placeholder }: { label: string; value:
   );
 }
 
-export function AnnotationPanel({ type, id }: { type: EntityType; id: string }) {
+export function AnnotationPanel({ type, id, extra }: { type: EntityType; id: string; extra?: ReactNode }) {
   const { annotation, annotate } = useStore();
   const a = annotation(type, id);
   return (
     <div className="panel stack">
       <div className="row"><span className="label" style={{ margin: 0 }}>Your rating</span><span className="spacer" /><QuickRate type={type} id={id} /></div>
+      {extra}
       <AutoText label="Review" value={a?.review ?? ''} placeholder="What you think of it" onSave={(review) => annotate(type, id, { review })} />
       <AutoText label="Notes" value={a?.notes ?? ''} placeholder="Anything to remember — context, standout tracks, where you heard it" onSave={(notes) => annotate(type, id, { notes })} />
       {a?.updated_at && <div className="small muted">Last changed {new Date(a.updated_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</div>}

@@ -1,5 +1,11 @@
 import { useMemo, useRef, useState } from 'react';
 import BulkBar from '../components/BulkBar';
+import { fmtScore } from '../components/Critics';
+import { criticScore } from '../lib/critics';
+import type { CriticScore } from '../lib/types';
+
+const ScoreCell = ({ s, bnm }: { s?: CriticScore; bnm?: boolean }) => (s?.score == null ? <span className="muted">—</span>
+  : <>{s.url ? <a href={s.url} target="_blank" rel="noreferrer">{fmtScore(s.score)}</a> : fmtScore(s.score)}{bnm && <span className="bnm" style={{ marginLeft: 5 }}>BNM</span>}</>);
 import { Link, useSearchParams } from 'react-router-dom';
 import { MultiSelect, RatingSelect, ratingMatches, SortSelect } from '../components/controls';
 import { Cover, Credits, fmtDate, QuickRate, ReleaseTile } from '../components/ui';
@@ -60,6 +66,9 @@ export default function Library() {
     const when = get('when') || 'released';
     const thisYear = new Date().getFullYear();
     const isUpcoming = (r: typeof data.releases[0]) => (r.date ? r.date > today : !!r.year && r.year > thisYear);
+    const crit = get('critics');
+    const pk = (id: string) => criticScore(ix.scoresByRelease.get(id), 'p4k')?.score ?? null;
+    const fz = (id: string) => criticScore(ix.scoresByRelease.get(id), 'drop')?.score ?? null;
     const out = data.releases.filter((r) => {
       if (q && !norm(`${r.title} ${r.artist_credit ?? ''} ${r.label ?? ''}`).includes(q)) return false;
       if (types.length && !types.includes(r.type)) return false;
@@ -71,6 +80,12 @@ export default function Library() {
       if (label && !ix.releaseLabelsByRelease.get(r.id)?.some((x) => x.label_id === label)) return false;
       if (fav && !a?.favorite) return false;
       if (reviewed && !a?.review && !a?.notes) return false;
+      if (crit) {
+        const p = pk(r.id), d = fz(r.id);
+        const ok = crit === 'p4k' ? p != null : crit === 'drop' ? d != null : crit === 'either' ? p != null || d != null : crit === 'both' ? p != null && d != null
+          : crit === 'p4k8' ? (p ?? 0) >= 8 : crit === 'drop8' ? (d ?? 0) >= 8 : crit === 'bnm' ? !!(r.ext as Record<string, unknown>).p4k_bnm : crit === 'none' ? p == null && d == null : true;
+        if (!ok) return false;
+      }
       if (prod && !producersByRelease.get(r.id)?.has(prod)) return false;
       if (linked === 'no' && (r.links.apple || r.artwork_url)) return false;
       if (linked === 'yes' && !r.links.apple) return false;
@@ -83,6 +98,8 @@ export default function Library() {
       'date-desc': (a, b) => (b.date ?? `${b.year ?? 0}`).localeCompare(a.date ?? `${a.year ?? 0}`),
       'date-asc': (a, b) => (a.date ?? `${a.year ?? 9999}`).localeCompare(b.date ?? `${b.year ?? 9999}`),
       rating: (a, b) => rv(b.id) - rv(a.id) || (b.year ?? 0) - (a.year ?? 0),
+      p4k: (a, b) => (pk(b.id) ?? -1) - (pk(a.id) ?? -1) || (b.year ?? 0) - (a.year ?? 0),
+      drop: (a, b) => (fz(b.id) ?? -1) - (fz(a.id) ?? -1) || (b.year ?? 0) - (a.year ?? 0),
       title: (a, b) => a.title.localeCompare(b.title),
       artist: (a, b) => (a.artist_credit ?? '').localeCompare(b.artist_credit ?? '') || (a.date ?? '').localeCompare(b.date ?? ''),
       added: (a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''),
@@ -90,7 +107,7 @@ export default function Library() {
     };
     out.sort(cmp[sort] ?? cmp['date-desc']);
     if (!rev) return out;
-    const has = (r: typeof out[0]) => (sort === 'rating' ? rv(r.id) > 0 : sort.startsWith('date') ? !!(r.date || r.year) : true);
+    const has = (r: typeof out[0]) => (sort === 'rating' ? rv(r.id) > 0 : sort === 'p4k' ? pk(r.id) != null : sort === 'drop' ? fz(r.id) != null : sort.startsWith('date') ? !!(r.date || r.year) : true);
     return [...out.filter(has).reverse(), ...out.filter((r) => !has(r))];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [data.releases, ix, sp, producersByRelease]);
@@ -117,7 +134,7 @@ export default function Library() {
             <div className="seg" role="group" aria-label="Release date">{[['', 'Released'], ['upcoming', 'Upcoming'], ['all', 'All']].map(([v, t]) => <button key={t} className={get('when') === v ? 'on' : ''} onClick={() => set('when', v || null)}>{t}</button>)}</div>
             <span className="spacer" />
             <SortSelect value={sort} onChange={(v) => { const n = new URLSearchParams(sp); if (v === 'date-desc') n.delete('sort'); else n.set('sort', v); n.delete('rev'); setSp(n, { replace: true }); }} rev={rev} onRev={(r) => set('rev', r ? '1' : null)}
-              options={[['date-desc', 'Release date'], ['rating', 'Your rating'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z'], ['added', 'Recently added']]} />
+              options={[['date-desc', 'Release date'], ['rating', 'Your rating'], ['p4k', 'Pitchfork score'], ['drop', 'Fantano score'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z'], ['added', 'Recently added']]} />
             <div className="seg" role="group" aria-label="View">
               <button className={view === 'grid' ? 'on' : ''} onClick={() => set('view', null)}>Covers</button>
               <button className={view === 'table' ? 'on' : ''} onClick={() => set('view', 'table')}>Table</button></div>
@@ -133,6 +150,9 @@ export default function Library() {
               <input className="input num" style={{ width: '100%' }} inputMode="numeric" placeholder="From" value={get('from')} onChange={(e) => set('from', e.target.value)} />
               <input className="input num" style={{ width: '100%' }} inputMode="numeric" placeholder="To" value={get('to')} onChange={(e) => set('to', e.target.value)} /></div></div>
             <label className="full-select"><span className="label">Your rating</span><RatingSelect value={get('rating')} onChange={(v) => set('rating', v)} /></label>
+            <label><span className="label">Critics</span><select className="select" style={{ width: '100%' }} value={get('critics')} onChange={(e) => set('critics', e.target.value)}>
+              <option value="">Any</option><option value="either">Has a Pitchfork or Fantano score</option><option value="both">Has both</option><option value="p4k">Has a Pitchfork score</option><option value="drop">Has a Fantano score</option>
+              <option value="p4k8">Pitchfork 8+</option><option value="drop8">Fantano 8+</option><option value="bnm">Best New Music / Reissue</option><option value="none">No critic score</option></select></label>
             <label><span className="label">Producer</span><select className="select" style={{ width: '100%' }} value={get('producer')} onChange={(e) => set('producer', e.target.value)}>
               <option value="">Any</option>{producers.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></label>
             {labels.length > 0 && <label><span className="label">Label</span><select className="select" style={{ width: '100%' }} value={get('label')} onChange={(e) => set('label', e.target.value)}>
@@ -150,14 +170,16 @@ export default function Library() {
               : <ReleaseTile key={r.id} r={r} />)}</div>
           ) : (
             <div className="table-wrap"><table className="table">
-              <thead><tr>{selecting && <th style={{ width: 30 }}><input type="checkbox" aria-label="Select all" checked={sel.size > 0 && sel.size === rows.length} onChange={(e) => setSel(e.target.checked ? new Set(rows.map((r) => r.id)) : new Set())} /></th>}<th className="thumb" /><th style={{ cursor: 'pointer' }} onClick={() => sortBy('title')}>Title{arrow('title', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('artist')}>Artist{arrow('artist', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('type')}>Type{arrow('type', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('date-desc')}>Date{arrow('date-desc', false)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('rating')}>Rating{arrow('rating', false)}</th></tr></thead>
+              <thead><tr>{selecting && <th style={{ width: 30 }}><input type="checkbox" aria-label="Select all" checked={sel.size > 0 && sel.size === rows.length} onChange={(e) => setSel(e.target.checked ? new Set(rows.map((r) => r.id)) : new Set())} /></th>}<th className="thumb" /><th style={{ cursor: 'pointer' }} onClick={() => sortBy('title')}>Title{arrow('title', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('artist')}>Artist{arrow('artist', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('type')}>Type{arrow('type', true)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('date-desc')}>Date{arrow('date-desc', false)}</th><th style={{ cursor: 'pointer' }} onClick={() => sortBy('rating')}>Rating{arrow('rating', false)}</th><th style={{ cursor: 'pointer', textAlign: 'right' }} onClick={() => sortBy('p4k')}>P4K{arrow('p4k', false)}</th><th style={{ cursor: 'pointer', textAlign: 'right' }} onClick={() => sortBy('drop')}>Fantano{arrow('drop', false)}</th></tr></thead>
               <tbody>{rows.slice(0, shown).map((r) => (
                 <tr key={r.id} className={sel.has(r.id) ? 'picked' : undefined}>{selecting && <td><input type="checkbox" checked={sel.has(r.id)} aria-label={`Select ${r.title}`} onClick={(e) => pick(rows.indexOf(r), e.shiftKey)} readOnly /></td>}<td><EditCell kind="action" label="Cover" onEdit={() => setCoverFor(r)}><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></EditCell></td>
                   <td><EditCell kind="text" label="Title" value={r.title} onSave={(v) => E.renameRelease(r, v)}><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link></EditCell></td>
                   <td><EditCell kind="text" label="Artist" value={r.artist_credit ?? ''} onSave={(v) => E.setReleaseArtist(r, v)}><Credits release={r} /></EditCell></td>
                   <td className="muted"><EditCell kind="type" label="Type" value={r.type} onSave={(v) => E.setReleaseType(r, v)}>{r.type}</EditCell></td>
                   <td className="num muted" style={{ whiteSpace: 'nowrap' }}><EditCell kind="text" label="Release date" placeholder="27 Nov 2017, 2017-11-27 or 2017" value={r.date ?? (r.year ? String(r.year) : '')} onSave={(v) => E.setReleaseWhen(r, v)}>{r.date ? fmtDate(r.date) : r.year ?? '\u00a0'}</EditCell></td>
-                  <td><QuickRate type="release" id={r.id} /></td></tr>))}</tbody>
+                  <td><QuickRate type="release" id={r.id} /></td>
+                  <td className="num" style={{ textAlign: 'right' }}><ScoreCell s={criticScore(ix.scoresByRelease.get(r.id), 'p4k')} bnm={!!(r.ext as Record<string, unknown>).p4k_bnm} /></td>
+                  <td className="num" style={{ textAlign: 'right' }}><ScoreCell s={criticScore(ix.scoresByRelease.get(r.id), 'drop')} /></td></tr>))}</tbody>
             </table></div>
           )}
           {rows.length > shown && <div style={{ textAlign: 'center', marginTop: 24 }}><button className="btn" onClick={() => setShown((s) => s + PAGE * 2)}>Show more ({(rows.length - shown).toLocaleString()} left)</button></div>}

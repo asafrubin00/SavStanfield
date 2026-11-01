@@ -2,6 +2,7 @@ import { fetchMembers } from './lib/members';
 import ReviewImport from './pages/ReviewImport';
 import TidyArtists from './pages/TidyArtists';
 import { NavButtons, useScrollMemory } from './lib/nav';
+import { CriticAutoRefresh } from './components/Critics';
 import { seedAppleArtist } from './lib/sources';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { BrowserRouter, Link, NavLink, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
@@ -140,7 +141,7 @@ function Shell() {
       <div className="main">
         <header className="topbar">
           <button className="btn menu-btn" onClick={() => setMenu(true)} aria-label="Open menu">Menu</button>
-          <NavButtons />
+          <NavButtons /><CriticAutoRefresh />
           <GlobalSearch />
           <span className="spacer" />
           <QueueStatus />

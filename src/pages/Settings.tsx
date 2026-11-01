@@ -4,6 +4,7 @@ import { adapter, mode, supabase } from '../lib/db';
 import { importWorkbook, type ImportResult } from '../lib/importSheet';
 import { needsRecheck, suspectApple } from '../lib/enrich';
 import { linkQueue, useLinkQueue } from '../lib/queue';
+import { CriticSettings } from '../components/Critics';
 import { appleAlbumsByIds, appleIdFromUrl, ext, soundcloudSearchEnabled } from '../lib/sources';
 import { useStore } from '../lib/store';
 import { TABLES, type DataSet, type TableName } from '../lib/types';
@@ -128,6 +129,8 @@ export default function Settings() {
       <h2 className="h-sec">Reviews from Apple Notes</h2>
       <p className="muted" style={{ marginTop: 0 }}>Paste a note full of “[2026] Artist - Title” reviews and they're matched to your albums and saved as your reviews.</p>
       <Link className="btn primary" to="/import-reviews">Import reviews</Link>
+
+      <CriticSettings />
 
       <h2 className="h-sec">Check matches</h2>
       <p className="muted" style={{ marginTop: 0 }}>Rechecks automatic matches with the stricter rules — catches things like “Pluto” matched to “Pluto × Baby Pluto”, sequels, instrumentals, live and clean versions. Wrong matches are re-matched or removed, and their cover, tracklist and labels are replaced. Anything left without a cover goes to Review matches.</p>
