@@ -8,6 +8,7 @@ import { parseArtistCredit } from '../lib/importSheet';
 import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists, type AppleAlbum, type MBGroup } from '../lib/sources';
 import { artistLabels, norm, releaseArtists, shownInArtists, trackArtists, useStore } from '../lib/store';
 import { useEdits } from '../lib/edits';
+import { ReleaseForm } from './ReleasePage';
 import { CreditSection, releaseRow, trackRow } from '../components/CreditTable';
 import { SortSelect, usePref, flip } from '../components/controls';
 import { customTypes, RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
@@ -44,6 +45,7 @@ export default function ArtistPage() {
   const [editLinks, setEditLinks] = useState(false);
   const [editing, setEditing] = useState(false);
   const [disco, setDisco] = useState(false);
+  const [addingRel, setAddingRel] = useState(false);
   const [featBusy, setFeatBusy] = useState(false);
   const cur = ix.artists.get(id!);
   const members = cur ? linkMembers(ix, groupMembers(cur)) : [];
@@ -140,6 +142,7 @@ export default function ArtistPage() {
       <div style={{ margin: '22px 0' }}><LinkBar links={a.links} kind="artist" name={a.name} onEdit={() => setEditLinks(true)} /></div>
       <div className="row">
         <button className="btn primary" disabled={!!busy} onClick={quickLink}>Find links &amp; photo</button>
+        <button className="btn" onClick={() => setAddingRel(true)}>Add a release</button>
         <button className="btn" onClick={() => setDisco(true)}>Import discography</button>
         <button className="btn" disabled={!discog.some((r) => !r.links.apple)} onClick={() => { linkQueue.add('release', discog.filter((r) => !r.links.apple || !r.artwork_url).map((r) => r.id)); say('Linking releases in the background'); }}>Link all releases</button>
         <AddToList type="artist" id={a.id} />
@@ -203,6 +206,7 @@ export default function ArtistPage() {
 
       {editLinks && <LinksEditor links={a.links} onClose={() => setEditLinks(false)} onSave={(links) => save({ links })} />}
       {editing && <ArtistForm artist={a} onClose={() => setEditing(false)} />}
+      {addingRel && <ReleaseForm defaults={{ artist_credit: a.name }} onClose={() => setAddingRel(false)} />}
       {disco && <DiscographyImporter artist={a} onClose={() => setDisco(false)} />}
       {merging && <MergeArtist artist={a} onClose={() => setMerging(false)} />}
     </div>
@@ -286,6 +290,7 @@ function DiscographyImporter({ artist, onClose }: { artist: Artist; onClose: () 
   const [status, setStatus] = useState('');
   const [impSort, setImpSort] = usePref<{ col: string; asc: boolean }>('import.sort', { col: 'date', asc: true });
   const [sel, setSel] = useState<Set<string>>(new Set());
+  const [impQ, setImpQ] = useState('');
   const [types, setTypes] = useState<Set<string>>(new Set(['Album', 'Mixtape', 'EP', 'Compilation', 'Soundtrack', 'Live', 'Other']));
   const [mbChoices, setMbChoices] = useState<{ id: string; name: string; disambiguation?: string; country?: string }[] | null>(null);
 
@@ -347,7 +352,8 @@ function DiscographyImporter({ artist, onClose }: { artist: Artist; onClose: () 
   }
 
   const sortVal = (r: NonNullable<typeof rows>[number], c: string) => c === 'title' ? r.title : c === 'type' ? r.type : c === 'source' ? [r.apple && 'Apple', r.mb && 'MB'].filter(Boolean).join(' + ') : r.date ?? '';
-  const visible = (rows?.filter((r) => types.has(r.type) || (r.type === 'Single' && types.has('Single'))) ?? [])
+  const qn = norm(impQ);
+  const visible = (rows?.filter((r) => (qn ? norm(`${r.title} ${r.credit ?? ''}`).includes(qn) : types.has(r.type) || (r.type === 'Single' && types.has('Single')))) ?? [])
     .slice().sort((x, y) => { const a = sortVal(x, impSort.col), b = sortVal(y, impSort.col); if (!a !== !b) return a ? -1 : 1; const c = a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }); return impSort.asc ? c : -c; });
   const impTh = (c: string, label: string) => <th style={{ cursor: 'pointer' }} onClick={() => setImpSort(impSort.col === c ? { col: c, asc: !impSort.asc } : { col: c, asc: true })} aria-sort={impSort.col === c ? (impSort.asc ? 'ascending' : 'descending') : undefined}>{label}{impSort.col === c ? (impSort.asc ? ' ↑' : ' ↓') : ''}</th>;
   const allTypes = [...new Set(rows?.map((r) => r.type) ?? [])];
@@ -360,6 +366,7 @@ function DiscographyImporter({ artist, onClose }: { artist: Artist; onClose: () 
       </div>}
       {rows && <>
         <div className="row" style={{ marginBottom: 10 }}>
+          <input className="input" style={{ width: 200 }} placeholder="Search all releases…" aria-label="Search releases" value={impQ} onChange={(e) => setImpQ(e.target.value)} />
           {allTypes.map((t) => <button key={t} className={`chip${types.has(t) ? ' on' : ''}`} onClick={() => { const n = new Set(types); if (n.has(t)) n.delete(t); else n.add(t); setTypes(n); }}>{t} {rows.filter((r) => r.type === t).length}</button>)}
           <span className="spacer" />
           <button className="btn sm" onClick={() => setSel(new Set(visible.filter((r) => !r.have).map((r) => r.key)))}>Select all shown</button>
