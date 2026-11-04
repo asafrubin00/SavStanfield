@@ -181,41 +181,36 @@ function Shell() {
 
 function SignIn() {
   const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [mode, setMode] = useState<'password' | 'link'>('password');
   const [sent, setSent] = useState(false);
-  const [code, setCode] = useState('');
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   /*
-   * The email has a link and a code. The link opens in the browser — fine on a computer, but an app added to an
-   * iPhone home screen keeps its own separate sign-in, so there you type the code in here instead.
+   * Password: works everywhere, including an app added to an iPhone home screen (which keeps its own sign-in, so an
+   * email link — opening in the browser — can't sign it in). The email link stays as a way in on a computer,
+   * e.g. to set the password in Import & settings in the first place.
    */
-  const send = async () => {
-    setErr(''); setBusy(true);
-    const { error } = await supabase!.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
-    setBusy(false);
-    if (error) setErr(error.message); else setSent(true);
-  };
   return (
     <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', padding: 16 }}>
       <form className="panel" style={{ width: 'min(400px, 100%)' }} onSubmit={async (e) => {
-        e.preventDefault();
-        if (!sent) return void send();
-        setErr(''); setBusy(true);
-        const { error } = await supabase!.auth.verifyOtp({ email, token: code.replace(/\D/g, ''), type: 'email' });
+        e.preventDefault(); setErr(''); setBusy(true);
+        if (mode === 'password') {
+          const { error } = await supabase!.auth.signInWithPassword({ email, password });
+          if (error) setErr(/invalid login/i.test(error.message) ? 'Wrong email or password. No password yet? Use “Email me a link” on your computer, then set one in Import & settings.' : error.message);
+        } else {
+          const { error } = await supabase!.auth.signInWithOtp({ email, options: { emailRedirectTo: window.location.origin } });
+          if (error) setErr(error.message); else setSent(true);
+        }
         setBusy(false);
-        if (error) setErr(/expired|invalid/i.test(error.message) ? 'That code didn’t work — it may have expired. Send a new one and use the newest email.' : error.message);
       }}>
         <div className="brand" style={{ margin: '0 0 18px' }}><img src="/logo.jpg" alt="" /><span className="brand-name"><span>Sav</span><span>Stanfield</span></span></div>
-        {!sent ? <>
+        {sent ? <p>Check <strong>{email}</strong> for a sign-in link.</p> : <>
           <label><span className="label">Email</span><input className="input" style={{ width: '100%' }} type="email" autoComplete="email" required value={email} onChange={(e) => setEmail(e.target.value)} /></label>
-          <button className="btn primary" style={{ marginTop: 12 }} disabled={busy}>{busy ? 'Sending…' : 'Email me a sign-in code'}</button>
-        </> : <>
-          <p style={{ marginTop: 0 }}>Check <strong>{email}</strong>. Type the code from the email here — or, on a computer, just click the link in it.</p>
-          <label><span className="label">Code</span><input className="input num" style={{ width: '100%', fontSize: 22, letterSpacing: '.2em' }} inputMode="numeric" autoComplete="one-time-code" autoFocus required value={code} onChange={(e) => setCode(e.target.value)} /></label>
+          {mode === 'password' && <label style={{ display: 'block', marginTop: 10 }}><span className="label">Password</span><input className="input" style={{ width: '100%' }} type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></label>}
           <div className="row" style={{ marginTop: 12 }}>
-            <button className="btn primary" disabled={busy || code.replace(/\D/g, '').length < 6}>{busy ? 'Checking…' : 'Sign in'}</button>
-            <button type="button" className="btn ghost" disabled={busy} onClick={() => { setCode(''); void send(); }}>Send a new code</button>
-            <button type="button" className="btn ghost" onClick={() => { setSent(false); setCode(''); setErr(''); }}>Different email</button>
+            <button className="btn primary" disabled={busy}>{busy ? (mode === 'password' ? 'Signing in…' : 'Sending…') : mode === 'password' ? 'Sign in' : 'Email me a sign-in link'}</button>
+            <button type="button" className="btn ghost" onClick={() => { setMode(mode === 'password' ? 'link' : 'password'); setErr(''); }}>{mode === 'password' ? 'Email me a link instead' : 'Use a password'}</button>
           </div>
         </>}
         {err && <p style={{ color: 'var(--danger)' }}>{err}</p>}

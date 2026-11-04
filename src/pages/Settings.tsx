@@ -166,7 +166,36 @@ export default function Settings() {
 
       <h2 className="h-sec">Storage</h2>
       <p className="muted" style={{ marginTop: 0 }}>{mode === 'cloud' ? 'Your library is saved to your Supabase account and syncs across devices.' : 'Supabase isn’t connected, so your library is saved in this browser only. Download backups regularly.'}</p>
-      {supabase && <button className="btn" onClick={() => supabase!.auth.signOut()}>Sign out</button>}
+      {supabase && <SetPassword />}
+      {supabase && <button className="btn" style={{ marginTop: 16 }} onClick={() => supabase!.auth.signOut()}>Sign out</button>}
     </div>
+  );
+}
+
+/** A password for signing in where email links don't reach — the iPhone home-screen app. */
+function SetPassword() {
+  const [pw, setPw] = useState(''); const [pw2, setPw2] = useState('');
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const mismatch = !!pw2 && pw !== pw2;
+  return (
+    <form style={{ marginTop: 16 }} onSubmit={async (e) => {
+      e.preventDefault(); if (pw.length < 8 || pw !== pw2) return;
+      setBusy(true); setMsg(null);
+      const { error } = await supabase!.auth.updateUser({ password: pw });
+      setBusy(false);
+      if (error) setMsg({ ok: false, text: error.message });
+      else { setMsg({ ok: true, text: 'Password set. On your phone, sign in with your email and this password.' }); setPw(''); setPw2(''); }
+    }}>
+      <h3 className="small" style={{ margin: '0 0 6px' }}>Password</h3>
+      <p className="small muted" style={{ marginTop: 0 }}>For signing in on your phone’s home-screen app, where email links open in the browser instead. At least 8 characters.</p>
+      <div className="row">
+        <input className="input" type="password" autoComplete="new-password" placeholder="New password" aria-label="New password" value={pw} onChange={(e) => setPw(e.target.value)} />
+        <input className="input" type="password" autoComplete="new-password" placeholder="Same again" aria-label="Confirm password" value={pw2} onChange={(e) => setPw2(e.target.value)} />
+        <button className="btn primary" disabled={busy || pw.length < 8 || pw !== pw2}>{busy ? 'Saving…' : 'Set password'}</button>
+      </div>
+      {mismatch && <p className="small" style={{ color: 'var(--danger)' }}>The two don’t match.</p>}
+      {msg && <p className="small" style={{ color: msg.ok ? undefined : 'var(--danger)' }}>{msg.text}</p>}
+    </form>
   );
 }
