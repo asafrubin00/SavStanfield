@@ -4,10 +4,10 @@ import { SortSelect, usePref, flip } from '../components/controls';
 import { CoverGrid, CoverPicker, FolderSelect, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useRemoveFromList, useSaveOrder } from '../components/ListBits';
 import { Cover, fmtMs, QuickRate } from '../components/ui';
 import BulkBar from '../components/BulkBar';
+import ListAdder, { useDuplicates } from '../components/ListAdder';
 import { PickAllCell, PickRow, SelectButton, SelectionProvider } from '../components/Select';
-import { adapter } from '../lib/db';
 import { player, trackEmbed, usePlayer } from '../lib/player';
-import { norm, useStore } from '../lib/store';
+import { useStore } from '../lib/store';
 import type { List, ListItem, Release, Track } from '../lib/types';
 import { now } from '../lib/util';
 
@@ -22,11 +22,12 @@ const csvCell = (v: unknown) => { const s = String(v ?? ''); return /[",\n]/.tes
 
 export default function PlaylistView({ list: l }: { list: List }) {
   const st = useStore();
-  const { ix, data, upsert, remove, searchTracks, loadReleaseTracks, addTracksToList } = st;
+  const { ix, upsert, remove } = st;
   const nav = useNavigate();
   const ps = usePlayer();
   const items = useMemo(() => orderItems(ix, l, (ix.itemsByList.get(l.id) ?? []).filter((i) => i.entity_type === 'track')), [ix, l]);
   const saveOrder = useSaveOrder();
+  const dups = useDuplicates(items);
   const deleteList = useDeleteList();
   const removeItems = useRemoveFromList();
   useEffect(() => { void st.loadTracks(items.map((i) => i.entity_id!).filter(Boolean)); }, [items.length]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -34,15 +35,6 @@ export default function PlaylistView({ list: l }: { list: List }) {
   const [rev, setRev] = useState(false);
   const [view, setView] = usePref(`list.view.${l.id}`, 'songs');
   const [picking, setPicking] = useState(false);
-  const [q, setQ] = useState('');
-  const [found, setFound] = useState<Track[]>([]);
-  useEffect(() => {
-    if (q.trim().length < 2) { setFound([]); return; }
-    const t = window.setTimeout(() => { void searchTracks(q.trim(), 15).then(setFound).catch(() => setFound([])); }, 250);
-    return () => window.clearTimeout(t);
-  }, [q, searchTracks]);
-  const albumHits = useMemo(() => { const n = norm(q); return n.length < 2 ? [] : data.releases.filter((r) => norm(`${r.artist_credit} ${r.title}`).includes(n)).slice(0, 5); }, [q, data.releases]);
-
   type Row = { it: ListItem; t?: Track; r?: Release; i: number };
   const rows: Row[] = items.map((it, i) => { const t = ix.tracks.get(it.entity_id!); return { it, t, r: t?.release_id ? ix.releases.get(t.release_id) : undefined, i }; });
   const artistOf = (x: Row) => x.t?.artist_credit ?? x.r?.artist_credit ?? '';
@@ -92,35 +84,14 @@ export default function PlaylistView({ list: l }: { list: List }) {
         <SortSelect value={sort} onChange={(v) => { setSort(v); setRev(false); }} rev={rev} onRev={setRev} options={[['order', l.custom_order ? 'Your order' : 'Your order (newest first)'], ['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['length', 'Length'], ['rating', 'Your rating'], ['newest', 'Newest release']]} />
         {!canDrag && rows.length > 1 && <span className="small muted">Switch to “Your order” to drag songs around</span>}
         <span className="spacer" />
+        {dups.count > 0 && <button className="btn" onClick={() => void dups.run()} title="Keeps the first copy of each">Remove {dups.count} duplicate{dups.count === 1 ? '' : 's'}</button>}
         <SelectButton />
         <button className="btn" disabled={!rows.length} onClick={exportCsv} title="Spreadsheet with Apple Music links">Export CSV</button>
         <button className="btn" disabled={!rows.length} onClick={exportTxt} title="“Artist - Title” lines — paste into TuneMyMusic or Soundiiz to recreate it in Apple Music">Export text</button>
         <button className="btn danger" onClick={async () => { if (confirm(`Delete the playlist “${l.name}”? The songs stay in your library.`)) { await deleteList(l); nav('/lists'); } }}>Delete</button>
       </div>
 
-      <div className="search" style={{ maxWidth: 620, marginBottom: 18 }}>
-        <input className="input" placeholder="Add songs — search any song or album in your library" value={q} onChange={(e) => setQ(e.target.value)} aria-label="Add songs" />
-        {q.trim().length >= 2 && (
-          <div className="dropdown">
-            {found.length > 0 && <div className="dd-group">Songs</div>}
-            {found.map((t) => { const r = t.release_id ? ix.releases.get(t.release_id) : undefined; return (
-              <button key={t.id} className="dd-item btn ghost" style={{ width: '100%', justifyContent: 'flex-start', textAlign: 'left' }} onClick={() => addTracksToList(l.id, [t.id])}>
-                <Cover src={r?.artwork_url} title={t.title} size={32} /><span style={{ minWidth: 0 }}><strong>{t.title}</strong><div className="small muted">{t.artist_credit ?? r?.artist_credit} · {r?.title}</div></span>
-              </button>); })}
-            {albumHits.length > 0 && <div className="dd-group">Add a whole album</div>}
-            {albumHits.map((r) => (
-              <button key={r.id} className="dd-item btn ghost" style={{ width: '100%', justifyContent: 'flex-start', textAlign: 'left' }} onClick={async () => {
-                await loadReleaseTracks([r.id]);
-                const list = await adapter.tracksForReleases([r.id]);
-                if (!list.length) { st.say('No tracklist for that album yet — open it and click “Get tracklist”'); return; }
-                await addTracksToList(l.id, list.sort((a, b) => (a.disc ?? 1) - (b.disc ?? 1) || (a.number ?? 0) - (b.number ?? 0)).map((t) => t.id));
-              }}>
-                <Cover src={r.artwork_url} title={r.title} size={32} /><span><strong>{r.title}</strong><div className="small muted">{r.artist_credit} · {r.year}</div></span>
-              </button>))}
-            {!found.length && !albumHits.length && <div className="small muted" style={{ padding: 8 }}>Nothing found. Songs appear once their album has a tracklist.</div>}
-          </div>
-        )}
-      </div>
+      <ListAdder list={l} items={items} />
 
       {picking && <CoverPicker list={l} items={items} onClose={() => setPicking(false)} />}
       {!rows.length ? <div className="empty">No songs yet. Search above, or use “+ Playlist” on any album’s tracklist.</div> : view === 'albums' ? (

@@ -6,11 +6,12 @@ import { SortSelect, usePref, flip } from '../components/controls';
 import { Cover, fmtDate, QuickRate } from '../components/ui';
 import PlaylistView from './Playlist';
 import BulkBar from '../components/BulkBar';
+import ListAdder, { useDuplicates } from '../components/ListAdder';
 import { PickRow, SelectButton, SelectionProvider } from '../components/Select';
 import { CoverGrid, CoverPicker, FolderSelect, folderOfMap, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useMoveToFolder, useRemoveFromList, useSaveOrder } from '../components/ListBits';
 import { norm, useStore, type Index } from '../lib/store';
 import type { List, ListItem } from '../lib/types';
-import { now, uid } from '../lib/util';
+import { now } from '../lib/util';
 
 function itemView(ix: Index, it: ListItem) {
   if (it.entity_type === 'release') { const r = ix.releases.get(it.entity_id!); return r && { to: `/release/${r.id}`, title: r.title, sub: `${r.artist_credit} · ${r.year ?? ''}`, img: r.artwork_url, round: false }; }
@@ -177,7 +178,7 @@ export function Lists() {
 
 export default function ListPage() {
   const { id } = useParams();
-  const { data, ix, upsert, remove } = useStore();
+  const { ix, upsert, remove } = useStore();
   const nav = useNavigate();
   const l = ix.lists.get(id!);
   const l0 = ix.lists.get(id!);
@@ -185,30 +186,17 @@ export default function ListPage() {
   const saveOrder = useSaveOrder();
   const deleteList = useDeleteList();
   const removeItems = useRemoveFromList();
-  const [q, setQ] = useState('');
   const [filter, setFilter] = useState('');
   const [itemSort, setItemSort] = useState('order');
   const [itemRev, setItemRev] = useState(false);
   const [view, setView] = usePref(`list.view.${id}`, 'compact');
   const [picking, setPicking] = useState(false);
   const isArt = l0?.kind === 'artists';
-  const results = useMemo(() => {
-    const n = norm(q); if (n.length < 2) return [];
-    if (isArt) return data.artists.filter((a) => norm(a.name).includes(n)).sort((a, b) => Number(norm(b.name).startsWith(n)) - Number(norm(a.name).startsWith(n)) || a.name.length - b.name.length).slice(0, 10).map((a) => ({ type: 'artist' as const, id: a.id, title: a.name, sub: ix.lastByArtist.get(a.id) ? `Latest release ${ix.lastByArtist.get(a.id)!.slice(0, 4)}` : 'Artist' }));
-    return [
-      ...data.artists.filter((a) => norm(a.name).includes(n)).slice(0, 4).map((a) => ({ type: 'artist' as const, id: a.id, title: a.name, sub: 'Artist' })),
-      ...data.releases.filter((r) => norm(`${r.artist_credit} ${r.title}`).includes(n)).slice(0, 8).map((r) => ({ type: 'release' as const, id: r.id, title: r.title, sub: `${r.artist_credit} · ${r.year ?? ''}` })),
-      ...data.tracks.filter((t) => norm(t.title).includes(n)).slice(0, 4).map((t) => ({ type: 'track' as const, id: t.id, title: t.title, sub: `Song · ${t.artist_credit ?? ''}` })),
-    ];
-  }, [q, data, isArt, ix]);
+  const dups = useDuplicates(items);
   if (!l) return <div className="empty">List not found. <Link to="/lists">All lists</Link></div>;
   if (l.kind === 'playlist') return <PlaylistView list={l} />;
   if (l.kind === 'folder') return <Navigate to={`/lists?folder=${l.id}`} replace />;
 
-  const touch = () => upsert('lists', [{ ...l, updated_at: now() }]);
-  const add = async (type: ListItem['entity_type'], eid: string | null, label?: string) => {
-    await upsert('list_items', [{ id: uid(), list_id: l.id, entity_type: type, entity_id: eid, label: label ?? null, position: Math.max(0, ...items.map((x) => x.position)) + 1 }]); void touch(); setQ('');
-  };
   const fn = norm(filter);
   const rel = (it: ListItem) => it.entity_type === 'release' ? ix.releases.get(it.entity_id!) : it.entity_type === 'track' ? ix.releases.get(ix.tracks.get(it.entity_id!)?.release_id ?? '') : undefined;
   const day = (it: ListItem) => { if (it.entity_type === 'artist') return ix.lastByArtist.get(it.entity_id ?? '') ?? ''; const r = rel(it); return r?.date ?? (r?.year ? String(r.year) : ''); };
@@ -250,17 +238,11 @@ export default function ListPage() {
         {items.length > 12 && <input className="input" placeholder="Filter this list" value={filter} onChange={(e) => setFilter(e.target.value)} />}
         {!canMove && items.length > 1 && <span className="small muted">{filter ? 'Clear the filter' : `Switch to “${l.ranked ? 'Ranking' : 'Your order'}”`} to drag items around</span>}
         <span className="spacer" />
+        {dups.count > 0 && <button className="btn" onClick={() => void dups.run()} title="Keeps the first copy of each (and its note)">Remove {dups.count} duplicate{dups.count === 1 ? '' : 's'}</button>}
         {!isArt && <SelectButton />}
         <button className="btn danger" onClick={async () => { if (confirm(`Delete the list “${l.name}”? Nothing in your library is deleted.`)) { await deleteList(l); nav('/lists'); } }}>Delete list</button>
       </div>
-      <div className="search" style={{ maxWidth: 560, marginBottom: 20 }}>
-        <input className="input" placeholder={isArt ? 'Add an artist — search your library' : 'Add from your library — search artists, releases, songs'} value={q} onChange={(e) => setQ(e.target.value)}
-          onKeyDown={(e) => { if (e.key === 'Enter' && !results.length && q.trim()) void add('text', null, q.trim()); }} />
-        {q.trim().length >= 2 && <div className="dropdown">
-          {results.map((r) => <button key={r.type + r.id} className="dd-item btn ghost" style={{ width: '100%', justifyContent: 'flex-start', textAlign: 'left' }} onClick={() => add(r.type, r.id)}><span><strong>{r.title}</strong><div className="small muted">{r.sub}</div></span></button>)}
-          <button className="dd-item btn ghost" style={{ width: '100%', justifyContent: 'flex-start' }} onClick={() => add('text', null, q.trim())}>Add “{q.trim()}” as a text item</button>
-        </div>}
-      </div>
+      <ListAdder list={l} items={items} />
       {!items.length ? <div className="empty">This list is empty. Search above, or use “Add to list” on any page.</div> : view === 'covers' ? (
         <CoverGrid groups={groupForCovers(ix, shownItems, l.ranked ? new Map(items.map((it, i) => [it.id, i + 1])) : undefined)} label={l.name} onReorder={canMove ? (ids) => void saveOrder(l, ids) : undefined} onRemove={(ids, title) => void removeItems(ids, title, false)} />
       ) : (
