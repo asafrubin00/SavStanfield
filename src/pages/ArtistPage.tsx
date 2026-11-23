@@ -9,7 +9,9 @@ import { appleArtistAlbums, appleSearchArtists, mbArtistGroups, mbSearchArtists,
 import { artistLabels, norm, releaseArtists, shownInArtists, trackArtists, useStore } from '../lib/store';
 import { useEdits } from '../lib/edits';
 import { ReleaseForm } from './ReleasePage';
-import { CreditSection, releaseRow, trackRow } from '../components/CreditTable';
+import { CreditSection, releaseRow, rowItem, trackRow } from '../components/CreditTable';
+import BulkBar from '../components/BulkBar';
+import { PickTile, SelectButton, SelectionProvider, type Item } from '../components/Select';
 import { SortSelect, usePref, flip } from '../components/controls';
 import { customTypes, RELEASE_TYPES, type Artist, type Release, type Track } from '../lib/types';
 import { now, uid } from '../lib/util';
@@ -102,6 +104,19 @@ export default function ArtistPage() {
   const concerts = data.concerts.filter((c) => c.artist_id === a.id);
   const save = (patch: Partial<Artist>) => upsert('artists', [{ ...a, ...patch, updated_at: now() }]);
 
+  // The song/release tables under the covers (built here so selecting can span the whole page)
+  const singles = hiddenRel(HIDDEN[0][1]); const leaks = hiddenRel(HIDDEN[1][1]); const guest = hiddenRel(HIDDEN[2][1]);
+  const load = (rs: Release[]) => () => void st.loadReleaseTracks(rs.map((r) => r.id));
+  const prodRows = produced.flatMap(({ r, tracks, exec }) => [
+    ...(exec ? [releaseRow(ix, r, { key: `x${r.id}`, title: r.title, producers: releaseArtists(ix, r.id, 'exec_producer').map((p) => ({ name: p.name, id: p.id })), producerNote: 'exec.', src: { kind: 'release', r, exec: true } })] : []),
+    ...tracks.map((t) => trackRow(ix, t, r)),
+  ]);
+  const apRows = [...guest.map((r) => releaseRow(ix, r)), ...appearances.flatMap(({ r, tracks }) => tracks.map((t) => trackRow(ix, t, r,
+    trackArtists(ix, t.id, 'featured').some((x) => x.id === a.id) ? { onRemove: { label: `Not ${a.name} — remove this appearance`, run: () => void st.setTrackCredits(t.id, 'featured', trackArtists(ix, t.id, 'featured').filter((x) => x.id !== a.id).map((x) => x.name)) } } : {})))];
+  const singleRows = singles.map((r) => releaseRow(ix, r)); const leakRows = leaks.map((r) => releaseRow(ix, r));
+  const pickAll: Item[] = [...typeOrder.flatMap((t) => byType.get(t)!.map((r) => ({ type: 'release' as const, id: r.id }))), ...[...prodRows, ...singleRows, ...leakRows, ...apRows].map(rowItem)]
+    .filter((x, i, arr) => arr.findIndex((y) => y.type === x.type && y.id === x.id) === i);
+
   async function quickLink() {
     setBusy('Looking up…');
     try {
@@ -113,6 +128,7 @@ export default function ArtistPage() {
   }
 
   return (
+    <SelectionProvider all={pickAll}>
     <div>
       <div className="hero">
         <Cover src={a.image_url} title={a.name} eager />
@@ -143,6 +159,7 @@ export default function ArtistPage() {
       <div className="row">
         <button className="btn primary" disabled={!!busy} onClick={quickLink}>Find links &amp; photo</button>
         <button className="btn" onClick={() => setAddingRel(true)}>Add a release</button>
+        <SelectButton />
         <button className="btn" onClick={() => setDisco(true)}>Import discography</button>
         <button className="btn" disabled={!discog.some((r) => !r.links.apple)} onClick={() => { linkQueue.add('release', discog.filter((r) => !r.links.apple || !r.artwork_url).map((r) => r.id)); say('Linking releases in the background'); }}>Link all releases</button>
         <AddToList type="artist" id={a.id} />
@@ -177,25 +194,15 @@ export default function ArtistPage() {
             <label className="row"><input type="checkbox" checked={showCounts} onChange={(e) => setShowCounts(e.target.checked)} /> Show counts</label>
           </div>}
           {!discog.length && <div className="empty">No releases yet. <br /><button className="btn" onClick={() => setDisco(true)}>Import discography</button></div>}
-          {typeOrder.map((t) => <GridSection key={t} name={t} count={showCounts ? byType.get(t)!.length : undefined}>
-            <div className="grid tight">{byType.get(t)!.map((r) => <ReleaseTile key={r.id} r={r} showArtist={r.artist_credit !== a.name} />)}</div>
-          </GridSection>)}
-          {(() => {
-            const singles = hiddenRel(HIDDEN[0][1]); const leaks = hiddenRel(HIDDEN[1][1]); const guest = hiddenRel(HIDDEN[2][1]);
-            const load = (rs: Release[]) => () => void st.loadReleaseTracks(rs.map((r) => r.id));
-            const prodRows = produced.flatMap(({ r, tracks, exec }) => [
-              ...(exec ? [releaseRow(ix, r, { key: `x${r.id}`, title: r.title, producers: releaseArtists(ix, r.id, 'exec_producer').map((p) => ({ name: p.name, id: p.id })), producerNote: 'exec.', src: { kind: 'release', r, exec: true } })] : []),
-              ...tracks.map((t) => trackRow(ix, t, r)),
-            ]);
-            const apRows = [...guest.map((r) => releaseRow(ix, r)), ...appearances.flatMap(({ r, tracks }) => tracks.map((t) => trackRow(ix, t, r,
-              trackArtists(ix, t.id, 'featured').some((x) => x.id === a.id) ? { onRemove: { label: `Not ${a.name} — remove this appearance`, run: () => void st.setTrackCredits(t.id, 'featured', trackArtists(ix, t.id, 'featured').filter((x) => x.id !== a.id).map((x) => x.name)) } } : {})))];
-            return <div style={{ marginTop: 22 }}>
-              <CreditSection id="production" title="Production" rows={prodRows} />
-              <CreditSection id="singles" title="Singles" rows={singles.map((r) => releaseRow(ix, r))} onOpen={load(singles)} />
-              <CreditSection id="leaks" title="Leaks" rows={leaks.map((r) => releaseRow(ix, r))} onOpen={load(leaks)} />
-              <CreditSection id="appearances" title="Appearances" rows={apRows} onOpen={load(guest)} />
-            </div>;
-          })()}
+          {typeOrder.map((t) => { const order = byType.get(t)!.map((r) => ({ type: 'release' as const, id: r.id })); return <GridSection key={t} name={t} count={showCounts ? byType.get(t)!.length : undefined}>
+            <div className="grid tight">{byType.get(t)!.map((r, i) => <PickTile key={r.id} item={order[i]} order={order}><ReleaseTile r={r} showArtist={r.artist_credit !== a.name} /></PickTile>)}</div>
+          </GridSection>; })}
+          <div style={{ marginTop: 22 }}>
+            <CreditSection id="production" title="Production" rows={prodRows} />
+            <CreditSection id="singles" title="Singles" rows={singleRows} onOpen={load(singles)} />
+            <CreditSection id="leaks" title="Leaks" rows={leakRows} onOpen={load(leaks)} />
+            <CreditSection id="appearances" title="Appearances" rows={apRows} onOpen={load(guest)} />
+          </div>
           {concerts.length > 0 && <section>
             <h2 className="h-sec">Seen live</h2>
             {concerts.map((c) => <div key={c.id} className="row" style={{ padding: '4px 0' }}><span className="num muted">{fmtDate(c.date)}</span><strong>{c.tour}</strong><span className="muted">{c.venue}, {c.location}</span></div>)}
@@ -209,7 +216,9 @@ export default function ArtistPage() {
       {addingRel && <ReleaseForm defaults={{ artist_credit: a.name }} onClose={() => setAddingRel(false)} />}
       {disco && <DiscographyImporter artist={a} onClose={() => setDisco(false)} />}
       {merging && <MergeArtist artist={a} onClose={() => setMerging(false)} />}
+      <BulkBar />
     </div>
+    </SelectionProvider>
   );
 }
 

@@ -313,10 +313,10 @@ details summary { cursor: pointer; }
 .cell-hint { display: block; padding: 2px 4px 0; font-size: 11px; }
 .grid-toggle { margin: 22px 0 10px; }
 .modal .table thead th { position: sticky; top: 0; background: var(--surface); z-index: 1; }
-.pick-tile { position: relative; cursor: pointer; border-radius: var(--radius-s); outline: 2px solid transparent; outline-offset: 3px; }
+.pick-tile { position: relative; border-radius: var(--radius-s); outline: 2px solid transparent; outline-offset: 3px; }
 .pick-tile.on { outline-color: var(--accent); }
 .pick-tile .pick-box { position: absolute; top: 8px; left: 8px; z-index: 3; width: 20px; height: 20px; pointer-events: none; }
-.pick-tile .tile-rate { display: none; }
+.pick-tile.active .tile-rate { display: none; }
 .table tr.picked td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
 .bulk-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: 64px; z-index: 55; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; max-width: calc(100vw - 32px);
   background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); padding: 10px 14px; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
@@ -328,3 +328,16 @@ details summary { cursor: pointer; }
 a.critic-score { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: 3px; }
 .bnm { font-size: 11px; font-weight: 700; letter-spacing: .04em; color: #fff; background: #e4002b; border-radius: 3px; padding: 1px 5px; align-self: center; }
 .critic-maybe { padding: 6px 0; }
+.pick-tile.active { cursor: pointer; }
+.pick-cell { width: 32px; }
+.pick-cell input { width: 17px; height: 17px; cursor: pointer; }
+.tracklist li:has(> .pick-cell) { grid-template-columns: 24px 30px 1fr auto auto; cursor: pointer; }
+.tracklist li.picked, .table tr.picked td { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.bulk-names { min-width: 260px; }
+.bulk-names .people-input { background: var(--sunken); }
+.list-picker { position: absolute; bottom: calc(100% + 8px); left: 0; width: 300px; background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius-m); box-shadow: 0 10px 40px rgba(0,0,0,.3); padding: 8px; z-index: 60; }
+.list-picker .input { width: 100%; }
+.list-picker-items { max-height: 300px; overflow-y: auto; margin-top: 6px; display: grid; }
+.list-picker-items .dd-item { width: 100%; justify-content: space-between; text-align: left; gap: 10px; }
+.list-row { display: grid; grid-template-columns: var(--cols); gap: 10px; align-items: center; padding: 3px 0; border-bottom: 1px solid var(--line); font-size: 14px; background: var(--bg); }
+.list-row:has(> .pick-cell) { grid-template-columns: 24px var(--cols); }

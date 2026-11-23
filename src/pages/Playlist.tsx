@@ -3,6 +3,8 @@ import { Link, useNavigate } from 'react-router-dom';
 import { SortSelect, usePref, flip } from '../components/controls';
 import { CoverGrid, CoverPicker, FolderSelect, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useRemoveFromList, useSaveOrder } from '../components/ListBits';
 import { Cover, fmtMs, QuickRate } from '../components/ui';
+import BulkBar from '../components/BulkBar';
+import { PickAllCell, PickRow, SelectButton, SelectionProvider } from '../components/Select';
 import { adapter } from '../lib/db';
 import { player, trackEmbed, usePlayer } from '../lib/player';
 import { norm, useStore } from '../lib/store';
@@ -64,7 +66,14 @@ export default function PlaylistView({ list: l }: { list: List }) {
   }
   function exportTxt() { download(`${l.name}.txt`, rows.filter((x) => x.t).map((x) => `${artistOf(x)} - ${x.t!.title}`).join('\n'), 'text/plain'); }
 
+  // Select songs to copy into another list or playlist, edit, or take off this one
+  const pickItems = shown.filter((x) => x.t).map((x) => ({ type: 'track' as const, id: x.t!.id }));
+  const removeHere = { label: 'Remove from this playlist', run: (sel: { id: string }[]) => {
+    const want = new Set(sel.map((x) => x.id));
+    return removeItems(items.filter((it) => it.entity_id && want.has(it.entity_id)).map((it) => it.id), l.name, true);
+  } };
   return (
+    <SelectionProvider all={pickItems} removeFromHere={removeHere}>
     <div>
       <div className="hero" style={{ gridTemplateColumns: 'minmax(140px, 220px) 1fr', alignItems: 'end' }}>
         <ListCover list={l} items={items} onClick={() => setPicking(true)} />
@@ -83,6 +92,7 @@ export default function PlaylistView({ list: l }: { list: List }) {
         <SortSelect value={sort} onChange={(v) => { setSort(v); setRev(false); }} rev={rev} onRev={setRev} options={[['order', l.custom_order ? 'Your order' : 'Your order (newest first)'], ['title', 'Title'], ['artist', 'Artist'], ['album', 'Album'], ['length', 'Length'], ['rating', 'Your rating'], ['newest', 'Newest release']]} />
         {!canDrag && rows.length > 1 && <span className="small muted">Switch to “Your order” to drag songs around</span>}
         <span className="spacer" />
+        <SelectButton />
         <button className="btn" disabled={!rows.length} onClick={exportCsv} title="Spreadsheet with Apple Music links">Export CSV</button>
         <button className="btn" disabled={!rows.length} onClick={exportTxt} title="“Artist - Title” lines — paste into TuneMyMusic or Soundiiz to recreate it in Apple Music">Export text</button>
         <button className="btn danger" onClick={async () => { if (confirm(`Delete the playlist “${l.name}”? The songs stay in your library.`)) { await deleteList(l); nav('/lists'); } }}>Delete</button>
@@ -117,12 +127,12 @@ export default function PlaylistView({ list: l }: { list: List }) {
         <CoverGrid groups={groupForCovers(ix, shown.map((x) => x.it))} label={l.name} onReorder={canDrag ? (ids) => void saveOrder(l, ids) : undefined} onRemove={(ids, title) => void removeItems(ids, title, true)} />
       ) : (
         <div className="table-wrap"><table className="table">
-          <thead><tr>{canDrag && <th style={{ width: 28 }} />}<th style={{ width: 36 }}>#</th><th className="thumb" /><th>Title</th><th>Album</th><th style={{ textAlign: 'right' }}>Length</th><th /><th /></tr></thead>
+          <thead><tr><PickAllCell order={pickItems} />{canDrag && <th style={{ width: 28 }} />}<th style={{ width: 36 }}>#</th><th className="thumb" /><th>Title</th><th>Album</th><th style={{ textAlign: 'right' }}>Length</th><th /><th /></tr></thead>
           <Sortable ids={shown.map((x) => x.it.id)} onReorder={(ids) => void saveOrder(l, ids)}><tbody>{shown.map((x) => {
             const isPlaying = x.t && x.t.id === playing;
             return (
               <SortableItem key={x.it.id} id={x.it.id} disabled={!canDrag}>{({ ref, style, handle }) => (
-              <tr ref={ref} style={{ ...style, ...(isPlaying ? { background: 'color-mix(in srgb, var(--accent) 12%, transparent)' } : {}) }}>
+              <PickRow item={{ type: 'track', id: x.t?.id ?? x.it.id }} order={pickItems} rowRef={ref} style={{ ...style, ...(isPlaying ? { background: 'color-mix(in srgb, var(--accent) 12%, transparent)' } : {}) }}>
                 {canDrag && <td>{handle}</td>}
                 <td className="num muted">
                   <button className="btn sm ghost" style={{ padding: '2px 6px' }} aria-label={`Play ${x.t?.title ?? ''}`} disabled={!x.t} onClick={() => player.play(ids, ids.indexOf(x.t!.id), l.name)}>{isPlaying ? '♪' : x.i + 1}</button>
@@ -135,10 +145,12 @@ export default function PlaylistView({ list: l }: { list: List }) {
                 <td style={{ whiteSpace: 'nowrap', textAlign: 'right' }}>
                   <button className="btn sm ghost" aria-label="Remove" onClick={() => remove('list_items', [x.it.id])}>✕</button>
                 </td>
-              </tr>)}</SortableItem>);
+              </PickRow>)}</SortableItem>);
           })}</tbody></Sortable>
         </table></div>
       )}
+      <BulkBar />
     </div>
+    </SelectionProvider>
   );
 }

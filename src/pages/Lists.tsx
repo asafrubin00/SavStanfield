@@ -5,6 +5,8 @@ import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordi
 import { SortSelect, usePref, flip } from '../components/controls';
 import { Cover, fmtDate, QuickRate } from '../components/ui';
 import PlaylistView from './Playlist';
+import BulkBar from '../components/BulkBar';
+import { PickRow, SelectButton, SelectionProvider } from '../components/Select';
 import { CoverGrid, CoverPicker, FolderSelect, folderOfMap, groupForCovers, ListCover, orderItems, Sortable, SortableItem, useDeleteList, useMoveToFolder, useRemoveFromList, useSaveOrder } from '../components/ListBits';
 import { norm, useStore, type Index } from '../lib/store';
 import type { List, ListItem } from '../lib/types';
@@ -219,7 +221,14 @@ export default function ListPage() {
   const shownItems = sorted.filter((it) => !fn || norm(`${itemView(ix, it)?.title} ${itemView(ix, it)?.sub} ${it.note ?? ''}`).includes(fn));
   const canMove = itemSort === 'order' && !fn && !itemRev;
 
+  // Select albums and songs to copy into another list or playlist, edit, or take off this one (not on artist lists)
+  const pickItems = isArt ? [] : shownItems.filter((it) => (it.entity_type === 'release' || it.entity_type === 'track') && it.entity_id).map((it) => ({ type: it.entity_type as 'release' | 'track', id: it.entity_id! }));
+  const removeHere = { label: 'Remove from this list', run: (sel: { type: string; id: string }[]) => {
+    const want = new Set(sel.map((x) => `${x.type}:${x.id}`));
+    return removeItems(items.filter((it) => want.has(`${it.entity_type}:${it.entity_id}`)).map((it) => it.id), l.name, false);
+  } };
   return (
+    <SelectionProvider all={pickItems} removeFromHere={removeHere}>
     <div>
       <div className="hero" style={{ gridTemplateColumns: 'minmax(120px, 180px) 1fr', alignItems: 'end' }}>
         <ListCover list={l} items={items} onClick={() => setPicking(true)} />
@@ -241,6 +250,7 @@ export default function ListPage() {
         {items.length > 12 && <input className="input" placeholder="Filter this list" value={filter} onChange={(e) => setFilter(e.target.value)} />}
         {!canMove && items.length > 1 && <span className="small muted">{filter ? 'Clear the filter' : `Switch to “${l.ranked ? 'Ranking' : 'Your order'}”`} to drag items around</span>}
         <span className="spacer" />
+        {!isArt && <SelectButton />}
         <button className="btn danger" onClick={async () => { if (confirm(`Delete the list “${l.name}”? Nothing in your library is deleted.`)) { await deleteList(l); nav('/lists'); } }}>Delete list</button>
       </div>
       <div className="search" style={{ maxWidth: 560, marginBottom: 20 }}>
@@ -258,7 +268,8 @@ export default function ListPage() {
           const i = items.indexOf(it); const v = itemView(ix, it);
           return (
             <SortableItem key={it.id} id={it.id} disabled={!canMove}>{({ ref, style, handle }) => (
-            <li ref={ref} style={{ ...style, display: 'grid', gridTemplateColumns: `${canMove ? '24px ' : ''}${l.ranked ? '34px ' : ''}28px minmax(0, 1.4fr) minmax(0, 1fr) 190px`, gap: 10, alignItems: 'center', padding: '3px 0', borderBottom: '1px solid var(--line)', fontSize: 14, background: 'var(--bg)' }}>
+            <PickRow as="li" item={it.entity_id && (it.entity_type === 'release' || it.entity_type === 'track') ? { type: it.entity_type, id: it.entity_id } : null} order={pickItems} rowRef={ref} className="list-row"
+              style={{ ...style, ['--cols' as string]: `${canMove ? '24px ' : ''}${l.ranked ? '34px ' : ''}28px minmax(0, 1.4fr) minmax(0, 1fr) 190px` }}>
               {canMove && handle}
               {l.ranked && <span className="num muted" style={{ textAlign: 'right', fontWeight: 700 }}>{i + 1}</span>}
               <Cover src={v?.img} title={v?.title ?? '?'} size={28} round={v?.round} />
@@ -271,9 +282,11 @@ export default function ListPage() {
                 {it.entity_type !== 'text' && it.entity_type !== 'list' && it.entity_id && <QuickRate type={it.entity_type} id={it.entity_id} />}
                 <button className="btn sm ghost" aria-label="Remove" onClick={async () => { await remove('list_items', [it.id]); }}>✕</button>
               </div>
-            </li>)}</SortableItem>);
+            </PickRow>)}</SortableItem>);
         })}</ol></Sortable>
       )}
+      <BulkBar />
     </div>
+    </SelectionProvider>
   );
 }

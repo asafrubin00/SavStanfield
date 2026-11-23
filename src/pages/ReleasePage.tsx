@@ -3,6 +3,8 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { AddToList, AnnotationPanel, Cover, Credits, fmtDate, fmtMs, LinkBar, LinksEditor, Modal, QuickRate } from '../components/ui';
 import { autoLinkRelease, findReleaseLabels, followLinks, tracklistSources } from '../lib/enrich';
 import AddToPlaylist from '../components/AddToPlaylist';
+import BulkBar from '../components/BulkBar';
+import { PickRow, SelectButton, SelectionProvider } from '../components/Select';
 import { player, usePlayer } from '../lib/player';
 import TypeSelect from '../components/TypeSelect';
 import { CriticLines } from '../components/Critics';
@@ -141,7 +143,9 @@ export default function ReleasePage() {
     } catch (e) { say((e as Error).message); } finally { setBusy(''); }
   }
 
+  const trackItems = tracks.map((t) => ({ type: 'track' as const, id: t.id }));
   return (
+    <SelectionProvider all={trackItems}>
     <div>
       <div className="hero">
         <button type="button" className="list-cover" title="Change cover" onClick={() => setPickingArt(true)} style={{ padding: 0, border: 0, background: 'none', cursor: 'pointer', display: 'block', width: '100%' }}>
@@ -198,13 +202,14 @@ export default function ReleasePage() {
               <button className="btn sm" onClick={() => player.play(tracks.map((x) => x.id), 0, r.title)}>Play album</button>
               <AddToPlaylist trackIds={tracks.map((x) => x.id)} label="Add album to playlist" />
               {!editTracks && <button className="btn sm" onClick={() => setEditTracks(true)}>Edit tracklist</button>}
+              {!editTracks && <SelectButton />}
             </span>}</h2>
           {editTracks ? <TracklistEditor release={r} tracks={tracks} onClose={() => setEditTracks(false)} /> : !tracks.length ? <div className="empty">No tracks yet. “Get tracklist” pulls it from Apple Music, Deezer, MusicBrainz or Wikipedia — or <button className="btn sm" onClick={() => setEditTracks(true)}>type it in</button></div> : (
             <ol className="tracklist">{tracks.map((t, i) => {
               const prods = trackArtists(ix, t.id, 'producer'); const feats = trackArtists(ix, t.id, 'featured');
               const missing = songFeatures(t.title, t.artist_credit, (n) => ix.artistByName.get(norm(n))).unmatched;
               return (
-                <li key={t.id} className={playingId === t.id ? 'playing' : ''}>
+                <PickRow as="li" key={t.id} item={trackItems[i]} order={trackItems} className={playingId === t.id ? 'playing' : ''}>
                   <button className="n btn ghost sm" style={{ padding: '2px 4px' }} aria-label={`Play ${t.title}`} title="Play" onClick={() => player.play(tracks.map((x) => x.id), i, r.title)}>{playingId === t.id ? '♪' : t.number ?? i + 1}</button>
                   <span style={{ minWidth: 0 }}>
                     <Link to={`/track/${t.id}`} style={{ fontWeight: 500 }}>{t.title}</Link>
@@ -218,7 +223,7 @@ export default function ReleasePage() {
                   </span>
                   <span className="small muted num">{fmtMs(t.duration_ms)}</span>
                   <span className="row" style={{ flexWrap: 'nowrap', gap: 2 }}><QuickRate type="track" id={t.id} /><AddToPlaylist trackIds={[t.id]} label="+" small /></span>
-                </li>);
+                </PickRow>);
             })}</ol>
           )}
 
@@ -249,7 +254,9 @@ export default function ReleasePage() {
         onSet={async (u) => { await save({ artwork_url: u, ext: { ...r.ext, art_manual: u ? now() : undefined } }); say(u ? 'Cover updated' : 'Cover removed'); }} />}
       {choosing && <TracklistChooser release={r} hasTracks={tracks.length > 0} onClose={() => setChoosing(false)} onAppleSearch={() => { setChoosing(false); void fetchTracks(); }} />}
       {matching && <MatchWizard release={r} artistName={artistName} onClose={() => setMatching(false)} />}
+      <BulkBar />
     </div>
+    </SelectionProvider>
   );
 }
 

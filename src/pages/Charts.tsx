@@ -2,6 +2,8 @@ import { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { SortSelect, usePref, flip } from '../components/controls';
 import { Cover, Credits, QuickRate, ReleaseTile } from '../components/ui';
+import BulkBar from '../components/BulkBar';
+import { PickAllCell, PickRow, PickTile, SelectButton, SelectionProvider } from '../components/Select';
 import { norm, useStore } from '../lib/store';
 import { now, uid } from '../lib/util';
 
@@ -146,7 +148,9 @@ export default function Charts() {
     say('Saved as a list'); nav(`/list/${id}`);
   }
 
+  const topItems = top.map((r) => ({ type: 'release' as const, id: r.id }));
   return (
+    <SelectionProvider all={topItems}>
     <div>
       <div className="row" style={{ marginBottom: 20 }}><h1 className="h-page">Charts</h1></div>
       <div className="row" style={{ marginBottom: 8 }}>
@@ -167,18 +171,19 @@ export default function Charts() {
         <SortSelect value={topSort} onChange={(v) => { setTopSort(v); setTopRev(false); }} rev={topRev} onRev={setTopRev} options={[['rating', 'Your rating'], ['newest', 'Release date'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z']]} />
         <div className="seg" role="group" aria-label="View"><button className={view !== 'list' ? 'on' : ''} onClick={() => setView('covers')}>Album view</button><button className={view === 'list' ? 'on' : ''} onClick={() => setView('list')}>List view</button></div>
         <span className="muted">{top.length.toLocaleString()}</span><span className="spacer" />
+        <SelectButton />
         <button className="btn" disabled={!top.length} onClick={saveAsList}>Save as a list</button>
       </div>
       {!top.length ? <div className="empty">{min ? `Nothing rated ${exact ? 'exactly ' : ''}${min}★${exact ? '' : ' or higher'} here yet.` : 'Nothing matches these filters.'}</div>
         : view === 'list' ? (
           <div className="table-wrap"><table className="table">
-            <thead><tr><th style={{ width: 36 }}>#</th><th className="thumb" /><th>Title</th><th>Artist</th><th>Type</th><th>Date</th><th>Rating</th></tr></thead>
+            <thead><tr><PickAllCell order={topItems} /><th style={{ width: 36 }}>#</th><th className="thumb" /><th>Title</th><th>Artist</th><th>Type</th><th>Date</th><th>Rating</th></tr></thead>
             <tbody>{top.slice(0, shown).map((r, i) => (
-              <tr key={r.id}><td className="num muted">{i + 1}</td><td><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></td>
+              <PickRow key={r.id} item={topItems[i]} order={topItems}><td className="num muted">{i + 1}</td><td><Link to={`/release/${r.id}`}><Cover src={r.artwork_url} title={r.title} size={36} /></Link></td>
                 <td><Link to={`/release/${r.id}`} style={{ fontWeight: 600 }}>{r.title}</Link></td><td><Credits release={r} /></td><td className="muted">{r.type}</td>
-                <td className="num muted" style={{ whiteSpace: 'nowrap' }}>{r.date ?? r.year ?? ''}</td><td><QuickRate type="release" id={r.id} /></td></tr>))}</tbody>
+                <td className="num muted" style={{ whiteSpace: 'nowrap' }}>{r.date ?? r.year ?? ''}</td><td><QuickRate type="release" id={r.id} /></td></PickRow>))}</tbody>
           </table></div>
-        ) : <div className="grid tight">{top.slice(0, shown).map((r) => <ReleaseTile key={r.id} r={r} />)}</div>}
+        ) : <div className="grid tight">{top.slice(0, shown).map((r, i) => <PickTile key={r.id} item={topItems[i]} order={topItems}><ReleaseTile r={r} /></PickTile>)}</div>}
       {top.length > shown && <div style={{ textAlign: 'center', marginTop: 20 }}><button className="btn" onClick={() => setShown((s) => s + SHOW * 2)}>Show more ({(top.length - shown).toLocaleString()} left)</button></div>}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(340px, 1fr))', gap: '8px 40px' }}>
@@ -188,6 +193,8 @@ export default function Charts() {
         <section><h2 className="h-sec">Highest average <span className="muted">3+ rated</span></h2><Bars unit="★ average" rows={artistStats.filter((x) => x.rated >= 3).map((x) => ({ ...x, avg: x.sum / x.rated })).sort((x, y) => y.avg - x.avg || y.rated - x.rated).slice(0, 15).map((x) => ({ label: x.a.name, to: `/artist/${x.a.id}`, value: x.avg }))} /></section>
         <section><h2 className="h-sec">Top producers</h2>{prodStats.length ? <Bars unit="releases" rows={prodStats.map((x) => ({ label: x.a.name, to: `/artist/${x.a.id}`, value: x.n }))} /> : <div className="muted">No producer credits yet.</div>}</section>
       </div>
+      <BulkBar />
     </div>
+    </SelectionProvider>
   );
 }

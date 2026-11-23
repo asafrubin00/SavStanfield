@@ -1,3 +1,4 @@
+import { PickTile, type Item } from './Select';
 import { useState, type CSSProperties, type ReactNode } from 'react';
 import { closestCenter, DndContext, KeyboardSensor, PointerSensor, TouchSensor, useSensor, useSensors, type DragEndEvent } from '@dnd-kit/core';
 import { arrayMove, rectSortingStrategy, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable';
@@ -89,7 +90,9 @@ export function ImagePicker({ title, onSet, onClose, choices = [], choicesLabel,
 }
 
 /** One tile in the covers view: an album (with the songs from it), an artist, a label or a text entry. */
-type Group = { key: string; itemIds: string[]; rank?: number; release?: Release; trackIds: string[]; to?: string; title: string; sub: string; img?: string | null; round?: boolean; rate?: { type: 'release' | 'artist' | 'label' | 'track'; id: string } };
+type Group = { key: string; itemIds: string[]; rank?: number; release?: Release; trackIds: string[]; to?: string; title: string; sub: string; img?: string | null; round?: boolean; rate?: { type: 'release' | 'artist' | 'label' | 'track'; id: string };
+  /** What selecting this tile picks: the album, or the songs from it on this list. */
+  picks?: Item[] };
 
 /** Group list items into cover tiles, keeping the order they're given in. Songs from the same album share a tile. */
 export function groupForCovers(ix: Index, items: ListItem[], ranks?: Map<string, number>): Group[] {
@@ -103,6 +106,7 @@ export function groupForCovers(ix: Index, items: ListItem[], ranks?: Map<string,
       const key = r ? `r${r.id}` : `t${id}`;
       const g = groups.get(key) ?? { key, itemIds: [] as string[], rank, release: r, trackIds: [], to: r ? `/release/${r.id}` : t ? `/track/${t.id}` : undefined, title: r?.title ?? t?.title ?? 'Loading…', sub: r ? `${r.artist_credit ?? ''}${r.year ? ` · ${r.year}` : ''}` : t?.artist_credit ?? '', img: r?.artwork_url, rate: r ? { type: 'release' as const, id: r.id } : t ? { type: 'track' as const, id: t.id } : undefined };
       if (t) g.trackIds.push(t.id);
+      if (it.entity_id) (g.picks ??= []).push({ type: it.entity_type, id: it.entity_id });
       g.itemIds.push(it.id);
       groups.set(key, g);
     } else if (it.entity_type === 'artist') {
@@ -116,10 +120,12 @@ export function groupForCovers(ix: Index, items: ListItem[], ranks?: Map<string,
 
 export function CoverGrid({ groups, label, extra, onReorder, onRemove }: { groups: Group[]; label: string; extra?: (g: Group) => ReactNode; onReorder?: (itemIds: string[]) => void; onRemove?: (itemIds: string[], title: string) => void }) {
   const ids = groups.map((g) => g.key);
+  const order = groups.map((g) => g.picks?.[0]).filter(Boolean) as Item[];
+  const pick = (g: Group, node: ReactNode) => (g.picks?.length ? <PickTile item={g.picks[0]} order={order} members={g.picks}>{node}</PickTile> : node);
   const grid = (
     <div className="grid">{groups.map((g) => (
       <SortableItem key={g.key} id={g.key} disabled={!onReorder}>{({ ref, style, handle }) => (
-      <div ref={ref} style={style} className="tile">
+      <div ref={ref} style={style} className="tile">{pick(g, <>
         <div className="tile-cover">
           {onReorder && <span className="tile-handle">{handle}</span>}
           {onRemove && <button type="button" className="tile-remove" aria-label={`Remove ${g.title} from this list`} title="Remove from this list" onClick={() => onRemove(g.itemIds, g.title)}>×</button>}
@@ -132,7 +138,7 @@ export function CoverGrid({ groups, label, extra, onReorder, onRemove }: { group
         <div className="s">{g.release ? <><Credits release={g.release} />{g.release.year ? ` · ${g.release.year}` : ''}</> : g.sub}</div>
         {g.round && g.rate && <TileRate type={g.rate.type} id={g.rate.id} inline />}
         {(g.trackIds.length > 1 || extra) && <div className="meta">{g.trackIds.length > 1 && <span>{g.trackIds.length} songs</span>}{extra?.(g)}</div>}
-      </div>)}</SortableItem>))}
+      </>)}</div>)}</SortableItem>))}
     </div>
   );
   if (!onReorder) return grid;

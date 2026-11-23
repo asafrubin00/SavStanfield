@@ -1,6 +1,8 @@
 import { useMemo, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { MultiSelect, SortSelect, usePref, flip } from '../components/controls';
+import BulkBar from '../components/BulkBar';
+import { PickTile, SelectButton, SelectionProvider } from '../components/Select';
 import { AddToList, OldNotes, PageKicker, Cover, fmtDate, LinkBar, LinksEditor, Modal, ReleaseTile } from '../components/ui';
 import { linkQueue } from '../lib/queue';
 import { norm, useStore, type Index } from '../lib/store';
@@ -104,8 +106,10 @@ export default function LabelPage() {
   const shownSorted = flip(shown, rev, (r) => (sort === 'rating' ? rt(r) > 0 : true));
   const years = releases.map((r) => r.year).filter(Boolean) as number[];
   const save = (p: Partial<Label>) => upsert('labels', [{ ...l, ...p, updated_at: now() }]);
+  const pickItems = shownSorted.map((r) => ({ type: 'release' as const, id: r.id }));
 
   return (
+    <SelectionProvider all={pickItems}>
     <div>
       <div className="hero" style={{ gridTemplateColumns: 'minmax(160px, 240px) 1fr' }}>
         <Cover src={l.image_url} title={l.name} eager />
@@ -119,7 +123,7 @@ export default function LabelPage() {
         </div>
       </div>
       <div style={{ margin: '22px 0' }}><LinkBar links={l.links} kind="label" name={l.name} onEdit={() => setEditLinks(true)} /></div>
-      <div className="row"><AddToList type="label" id={l.id} /><button className="btn" onClick={() => setMerging(true)}>Merge…</button></div>
+      <div className="row"><AddToList type="label" id={l.id} /><button className="btn" onClick={() => setMerging(true)}>Merge…</button><SelectButton /></div>
 
       <div style={{ marginTop: 28 }}>
         <div>
@@ -134,7 +138,7 @@ export default function LabelPage() {
             <SortSelect value={sort} onChange={(v) => { setSort(v); setRev(false); }} rev={rev} onRev={setRev} options={[['newest', 'Release date'], ['artist', 'Artist A–Z'], ['title', 'Title A–Z']]} />
             <div style={{ minWidth: 180 }}><MultiSelect label="Types" options={[...new Set(releases.map((r) => r.type))].sort()} value={types} onChange={setTypes} /></div>
           </div>}
-          {shownSorted.length ? <div className="grid tight">{shownSorted.map((r) => <ReleaseTile key={r.id} r={r} />)}</div> : <div className="empty">No releases on this label yet. Add it on a release with Edit.</div>}
+          {shownSorted.length ? <div className="grid tight">{shownSorted.map((r, i) => <PickTile key={r.id} item={pickItems[i]} order={pickItems}><ReleaseTile r={r} /></PickTile>)}</div> : <div className="empty">No releases on this label yet. Add it on a release with Edit.</div>}
           <div style={{ marginTop: 40 }}><button className="btn danger" onClick={async () => { if (confirm(`Delete the label ${l.name}? Releases stay; they just lose this label.`)) { await st.deleteLabel(l.id); nav('/labels'); } }}>Delete label</button></div>
         </div>
       </div>
@@ -144,7 +148,9 @@ export default function LabelPage() {
       {merging && <Modal title={`Merge ${l.name} into…`} onClose={() => setMerging(false)}>
         <MergeLabel from={l} done={(into) => { setMerging(false); say(`Merged into ${into.name}`); nav(`/label/${into.id}`); }} options={data.labels.filter((x) => x.id !== l.id)} />
       </Modal>}
+      <BulkBar />
     </div>
+    </SelectionProvider>
   );
 }
 

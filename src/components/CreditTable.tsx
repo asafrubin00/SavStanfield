@@ -2,6 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 're
 import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
 import EditCell from './EditCell';
+import { PickAllCell, PickRow, useSelection, type Item } from './Select';
 import { ImagePicker } from './ListBits';
 import { useEdits } from '../lib/edits';
 import { Cover, Credits, Fav, fmtDate } from './ui';
@@ -67,6 +68,9 @@ export function releaseRow(ix: Index, r: Release, extra: Partial<CreditRow> = {}
   };
 }
 
+/** What selecting a row picks: the song, or the whole release for a single / leak / exec-produced album. */
+export const rowItem = (r: CreditRow): Item => (r.src.kind === 'track' ? { type: 'track', id: r.src.t.id } : { type: 'release', id: r.src.r.id });
+
 /** A cell that trails off with "…" and shows everything in a small popup when you hover over it. */
 function Clip({ children, full }: { children: ReactNode; full?: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null);
@@ -97,7 +101,7 @@ const COLS: [Col, string][] = [['title', 'Song'], ['artist', 'Artist'], ['featur
  * click a column to sort, type to filter.
  */
 export function CreditSection({ id, title, rows, onOpen }: { id: string; title: string; rows: CreditRow[]; onOpen?: () => void }) {
-  const st = useStore(); const E = useEdits(); const nav = useNavigate();
+  const st = useStore(); const E = useEdits(); const nav = useNavigate(); const sel = useSelection();
   const [coverFor, setCoverFor] = useState<Release | null>(null);
   const [open, setOpen] = usePref(`artist.sec.${id}`, false);
   const [sort, setSort] = usePref<{ col: Col; asc: boolean }>(`artist.sec.${id}.sort`, { col: 'date', asc: false });
@@ -121,6 +125,7 @@ export function CreditSection({ id, title, rows, onOpen }: { id: string; title: 
     const c = a.localeCompare(b, undefined, { sensitivity: 'base', numeric: true }) || y.date.localeCompare(x.date);
     return sort.asc ? c : -c;
   });
+  const order = shown.map(rowItem);
   const by = (c: Col) => setSort(sort.col === c ? { col: c, asc: !sort.asc } : { col: c, asc: c !== 'date' && c !== 'fav' });
 
   return (
@@ -133,8 +138,8 @@ export function CreditSection({ id, title, rows, onOpen }: { id: string; title: 
         {open && q && <span className="small muted">{shown.length} of {rows.length}</span>}
       </div>
       {open && <div className="table-wrap"><table className="table credit-table">
-        <colgroup><col style={{ width: 40 }} /><col style={{ width: '22%' }} /><col style={{ width: '14%' }} /><col style={{ width: '17%' }} /><col style={{ width: '17%' }} /><col style={{ width: '18%' }} /><col style={{ width: 104 }} /><col style={{ width: 40 }} /></colgroup>
-        <thead><tr><th />{COLS.map(([c, label]) => (
+        <colgroup>{sel?.selecting && <col style={{ width: 32 }} />}<col style={{ width: 40 }} /><col style={{ width: '22%' }} /><col style={{ width: '14%' }} /><col style={{ width: '17%' }} /><col style={{ width: '17%' }} /><col style={{ width: '18%' }} /><col style={{ width: 104 }} /><col style={{ width: 40 }} /></colgroup>
+        <thead><tr><PickAllCell order={order} /><th />{COLS.map(([c, label]) => (
           <th key={c} onClick={() => by(c)} aria-sort={sort.col === c ? (sort.asc ? 'ascending' : 'descending') : undefined} style={c === 'fav' ? { textAlign: 'center' } : undefined}>
             {label}{sort.col === c ? (sort.asc ? ' ↑' : ' ↓') : ''}</th>))}</tr></thead>
         <tbody>{shown.map((r) => {
@@ -149,7 +154,7 @@ export function CreditSection({ id, title, rows, onOpen }: { id: string; title: 
             return <EditCell kind="names" label={label} value={nm(cur)} onSave={async (v) => E.setTrackPeople(await E.ensureOnlyTrack(src.r, r.title), role, v)}>{children}</EditCell>;
           };
           return (
-            <tr key={r.key}>
+            <PickRow key={r.key} item={rowItem(r)} order={order}>
               <td className="thumb">{rel ? <EditCell kind="action" label="Cover" onEdit={() => setCoverFor(rel)}><Link to={`/release/${rel.id}`}><Cover src={r.cover} title={rel.title} size={28} /></Link></EditCell> : <Cover src={r.cover} title={r.title} size={28} />}</td>
               <td><div className="title-cell"><EditCell kind="text" label="Title" value={src.kind === 'track' ? src.t.title : src.r.title} onSave={(v) => (src.kind === 'track' ? E.renameTrack(src.t, v) : E.renameRelease(src.r, v))}>
                 <Clip full={r.fullTitle ?? r.title}><Link to={r.titleTo} style={{ fontWeight: 600 }}>{r.title}</Link></Clip></EditCell>
@@ -162,7 +167,7 @@ export function CreditSection({ id, title, rows, onOpen }: { id: string; title: 
               <td>{rel ? <EditCell kind="text" label="Album / release title" value={rel.title} onSave={(v) => E.renameRelease(rel, v)}><Clip><Link to={`/release/${rel.id}`}>{rel.title}</Link></Clip></EditCell> : null}</td>
               <td className="num muted small" style={{ whiteSpace: 'nowrap' }}>{rel ? <EditCell kind="text" label="Release date" placeholder="27 Nov 2017, 2017-11-27 or 2017" value={rel.date ?? (rel.year ? String(rel.year) : '')} onSave={(v) => E.setReleaseWhen(rel, v)}>{r.date.length > 4 ? fmtDate(r.date) : r.date || '\u00a0'}</EditCell> : null}</td>
               <td style={{ textAlign: 'center' }}><Fav on={!!fav} onToggle={() => void st.annotate(r.fav.type, r.fav.id, { favorite: !fav })} /></td>
-            </tr>);
+            </PickRow>);
         })}</tbody>
       </table></div>}
       {open && !shown.length && <div className="small muted" style={{ padding: '8px 0' }}>Nothing matches “{q}”.</div>}
